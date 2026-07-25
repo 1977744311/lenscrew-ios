@@ -27,6 +27,10 @@ public actor CrewCoordinator {
 
     private var store = CrewStore()
     private var navigator = GlassNavigator()
+    /// 审批到达时是否自动把眼镜切到审批卡。默认开——agent 卡在那里等人；
+    /// 但用户在专注看流水时可能不想被抢屏，手机设置里可以关掉。
+    /// 关掉只影响"抢屏"，审批照样进队列、结清后的 dismiss 逻辑也不变。
+    private var autoPresentApprovals = true
 
     public init(
         bridge: any BridgeConnecting,
@@ -40,6 +44,10 @@ public actor CrewCoordinator {
 
     public var sessions: [SessionState] { store.orderedSessions }
     public var screen: GlassScreen { navigator.screen }
+
+    public func setAutoPresentApprovals(_ enabled: Bool) {
+        autoPresentApprovals = enabled
+    }
 
     /// 状态快照流。UI 不该去轮询 actor——每次状态变化推一份，SwiftUI 直接跟着走。
     public nonisolated var snapshots: AsyncStream<CrewSnapshot> {
@@ -122,7 +130,9 @@ public actor CrewCoordinator {
 
         switch event {
         case let .approvalRequested(_, sessionID, approval):
-            navigator.presentApproval(sessionID: sessionID, approvalID: approval.id)
+            if autoPresentApprovals {
+                navigator.presentApproval(sessionID: sessionID, approvalID: approval.id)
+            }
         case let .approvalSettled(_, _, approvalID, _, _):
             navigator.dismissApproval(approvalID)
         case .blockAppended, .blockUpdated:

@@ -64,6 +64,29 @@ struct CrewCoordinatorTests {
         #expect(payload.contains("approve:decline"))
     }
 
+    @Test("关闭自动亮屏后，审批到达不抢占眼镜屏，但照样进队列")
+    func approvalDoesNotPreemptWhenAutoPresentDisabled() async throws {
+        let bridge = MockBridgeConnection()
+        let glasses = MockGlassesSession()
+        try await glasses.start()
+        try await glasses.attachDisplay()
+        let coordinator = CrewCoordinator(bridge: bridge, glasses: glasses)
+        await coordinator.setAutoPresentApprovals(false)
+
+        await coordinator.ingest(.sessionCreated(seq: 1, session: session("s1")))
+        await coordinator.tap(actionID: GlassAction.openSession("s1").actionID)
+        await coordinator.ingest(
+            .approvalRequested(seq: 2, sessionID: "s1", approval: approval("a1"))
+        )
+
+        // 眼镜停在原地，没有被切到审批卡
+        #expect(
+            await coordinator.screen == .transcript(sessionID: "s1", page: 0, following: true)
+        )
+        // 审批本身不受影响：仍然挂在会话上等手机端裁决
+        #expect(await coordinator.sessions.first?.pendingApprovals.map(\.id) == ["a1"])
+    }
+
     @Test("眼镜上点批准会把裁决发回 bridge，但不抢先撤卡")
     func tapSendsDecisionAndWaitsForConfirmation() async throws {
         let bridge = MockBridgeConnection()

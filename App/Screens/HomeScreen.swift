@@ -1,232 +1,338 @@
 import AgentProtocol
 import BridgeLink
-import GlassRenderer
-import GlassesKit
 import LensCrewCore
 import SwiftUI
 
+/// 屏 1 · 指挥台：跨会话的审批队列置顶 + 按最近活动排的会话列表。
 struct HomeScreen: View {
-    @State var model: CrewViewModel
-    @State private var newSessionAgent: AgentKind = .codex
-    @State private var newSessionRoot = ""
+    let model: CrewViewModel
+    @Binding var path: [String]
+    @State private var filter: AgentKind?
+    /// 已发出裁决、还没等到 approvalSettled 的审批：期间禁用按钮防止重复提交，
+    /// 但卡不撤——撤卡的唯一依据是 bridge 的结清事件
+    @State private var resolvingApprovals: Set<String> = []
 
     var body: some View {
-        NavigationStack {
-            List {
-                bridgeSection
-                if model.isConnected {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                header
+                    .padding(.horizontal, 20)
+                VStack(alignment: .leading, spacing: 14) {
+                    if let error = model.lastError {
+                        errorRow(error)
+                    }
+                    if !model.pendingApprovalItems.isEmpty {
+                        approvalsSection
+                    }
                     sessionsSection
-                    newSessionSection
                 }
-                glassesSection
-                if let error = model.lastError {
-                    Section {
-                        Text(error)
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    } header: {
-                        Text("最近一次错误")
+                .padding(.horizontal, 16)
+            }
+            .padding(.top, 4)
+        }
+        .background(LC.bg)
+        .toolbar(.hidden, for: .navigationBar)
+        .contentMargins(.bottom, 100, for: .scrollContent)
+    }
+
+    // MARK: - 头部
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Text("LensCrew")
+                    .font(.system(size: 28, weight: .heavy))
+                    .foregroundStyle(LC.text)
+                Spacer()
+                hostChip
+            }
+            HStack(spacing: 6) {
+                LCChip {
+                    Image(systemName: model.glassesMounted ? "eyeglasses" : "eyeglasses.slash")
+                        .font(.system(size: 12))
+                    Text(model.glassesMounted ? "眼镜已挂载" : "眼镜未挂载")
+                }
+                if model.isConnected {
+                    LCChip { Text("\(model.sessions.count) 个会话") }
+                }
+            }
+        }
+    }
+
+    /// 主机状态 chip，点击弹快速切换菜单
+    private var hostChip: some View {
+        Menu {
+            ForEach(model.hosts.hosts) { host in
+                Button {
+                    Task { await model.switchHost(to: host.id) }
+                } label: {
+                    if host.id == model.hosts.activeHostID {
+                        Label(host.name, systemImage: "checkmark")
+                    } else {
+                        Text(host.name)
                     }
                 }
             }
-            .navigationTitle("LensCrew")
-        }
-    }
-
-    // MARK: - bridge
-
-    private var bridgeSection: some View {
-        Section {
-            LabeledContent("状态") {
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(linkColor)
-                        .frame(width: 8, height: 8)
-                    Text(linkText)
-                }
+            if model.hosts.active != nil, !model.isConnected {
+                Divider()
+                Button("重新连接") { Task { await model.connect() } }
             }
-            if !model.isConnected {
-                TextField("主机（Mac 的局域网地址）", text: $model.settings.host)
-                    .textInputAutocapitalization(.never)
-                    .autocorrectionDisabled()
-                    .keyboardType(.URL)
-                TextField(
-                    "端口",
-                    value: $model.settings.port,
-                    format: .number.grouping(.never)
-                )
-                .keyboardType(.numberPad)
-                SecureField("口令（lenscrew up 会打印）", text: $model.settings.token)
-                Button("连接") {
-                    Task { await model.connect() }
-                }
-                .disabled(!model.settings.isComplete)
-            } else {
-                Button("断开", role: .destructive) {
-                    Task { await model.disconnect() }
-                }
-            }
-        } header: {
-            Text("bridge")
-        } footer: {
-            if !model.isConnected {
-                Text("在 Mac 上跑 `lenscrew up --host 0.0.0.0`，它会打印地址和口令。")
+        } label: {
+            LCChip {
+                Circle().fill(linkColor).frame(width: 7, height: 7)
+                Image(systemName: "laptopcomputer").font(.system(size: 12))
+                Text(hostChipText)
             }
         }
     }
 
-    private var linkText: String {
+    private var hostChipText: String {
+        guard let host = model.hosts.active else { return "未配置电脑" }
         switch model.linkState {
-        case .disconnected: return "未连接"
-        case .connecting: return "连接中"
-        case .connected: return "已连接"
-        case let .failed(message): return "失败：\(message)"
+        case .connected:
+            if let ms = model.latencyMs { return "\(host.name) · \(ms)ms" }
+            return host.name
+        case .connecting:
+            return "\(host.name) · 连接中"
+        case .disconnected, .failed:
+            return "\(host.name) · 未连接"
         }
     }
 
     private var linkColor: Color {
         switch model.linkState {
-        case .connected: return .green
-        case .connecting: return .orange
-        case .disconnected: return .secondary
-        case .failed: return .red
+        case .connected: return LC.green
+        case .connecting: return LC.orange
+        case .disconnected: return LC.text3
+        case .failed: return LC.red
         }
     }
 
-    // MARK: - 会话
+    private func errorRow(_ message: String) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "exclamationmark.circle").font(.system(size: 12))
+            Text(message).lineLimit(2)
+        }
+        .font(.system(size: 12.5))
+        .foregroundStyle(LC.red)
+        .padding(.horizontal, 4)
+    }
+
+    // MARK: - 等你审批
+
+    private var approvalsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SectionHeader(
+                title: "等你审批 · \(model.pendingApprovalItems.count)",
+                titleColor: LC.orange
+            )
+            ForEach(model.pendingApprovalItems, id: \.approval.id) { item in
+                approvalCard(session: item.session, approval: item.approval)
+            }
+        }
+    }
+
+    private func approvalCard(session: AgentSession, approval: ApprovalRequest) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 8) {
+                AgentBadge(agent: session.agent)
+                Text(session.title)
+                    .font(.system(size: 12))
+                    .foregroundStyle(LC.text3)
+                    .lineLimit(1)
+                Spacer()
+                Text(relativeTime(fromMs: approval.requestedAtMs))
+                    .font(.system(size: 12))
+                    .foregroundStyle(LC.text3)
+            }
+            HStack(spacing: 7) {
+                Image(systemName: approvalIcon(approval.kind))
+                    .font(.system(size: 15))
+                    .foregroundStyle(LC.orange)
+                Text(approval.title)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(LC.text)
+                    .lineLimit(1)
+            }
+            Text(approval.detail.split(separator: "\n").first.map(String.init) ?? "")
+                .font(.system(size: 12, design: .monospaced))
+                .foregroundStyle(LC.text2)
+                .lineLimit(1)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 7)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+            let resolving = resolvingApprovals.contains(approval.id)
+            HStack(spacing: 8) {
+                LCButton(title: "查看上下文", kind: .tinted, minHeight: 40, fontSize: 14) {
+                    path.append(session.id)
+                }
+                if let once = onceAllowOption(approval) {
+                    LCButton(
+                        title: resolving ? "等待确认…" : "允许一次",
+                        kind: .primary, minHeight: 40, fontSize: 14
+                    ) {
+                        resolvingApprovals.insert(approval.id)
+                        Task {
+                            await model.resolve(
+                                approval: approval, in: session.id, optionID: once.id
+                            )
+                        }
+                    }
+                    .disabled(resolving)
+                    .opacity(resolving ? 0.6 : 1)
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 13)
+        .background(LC.elev, in: RoundedRectangle(cornerRadius: 20))
+        .overlay(
+            RoundedRectangle(cornerRadius: 20)
+                .strokeBorder(LC.orange.opacity(0.35), lineWidth: 0.5)
+        )
+    }
+
+    private func onceAllowOption(_ approval: ApprovalRequest) -> ApprovalOption? {
+        approval.options.first { $0.kind == .allow && $0.scope == .once }
+    }
+
+    // MARK: - 会话列表
+
+    private var orderedSessions: [SessionState] {
+        model.sessions.sorted { $0.session.updatedAtMs > $1.session.updatedAtMs }
+    }
+
+    private var filteredSessions: [SessionState] {
+        guard let filter else { return orderedSessions }
+        return orderedSessions.filter { $0.session.agent == filter }
+    }
 
     private var sessionsSection: some View {
-        Section("会话") {
-            if model.sessions.isEmpty {
-                Text("没有活动会话")
-                    .foregroundStyle(.secondary)
-            }
-            ForEach(model.sessions, id: \.session.id) { state in
-                NavigationLink {
-                    SessionScreen(model: model, sessionID: state.session.id)
-                } label: {
-                    SessionRow(state: state)
-                }
-            }
-        }
-    }
-
-    private var newSessionSection: some View {
-        Section("新建会话") {
-            Picker("Agent", selection: $newSessionAgent) {
-                ForEach(AgentKind.allCases, id: \.self) { agent in
-                    Text(agentLabel(agent)).tag(agent)
-                }
-            }
-            TextField(BridgeSettings.placeholderRoot, text: $newSessionRoot)
-                .textInputAutocapitalization(.never)
-                .autocorrectionDisabled()
-            if !model.settings.workspaceRoots.isEmpty {
-                Menu("用最近的目录") {
-                    ForEach(model.settings.workspaceRoots, id: \.self) { root in
-                        Button(root) { newSessionRoot = root }
+        VStack(alignment: .leading, spacing: 8) {
+            SectionHeader(title: "会话", trailing: "按最近活动")
+            filterChips
+            if filteredSessions.isEmpty {
+                emptySessionsCard
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(filteredSessions.enumerated()), id: \.element.session.id) {
+                        index, state in
+                        if index > 0 {
+                            Hairline().padding(.leading, 16)
+                        }
+                        NavigationLink(value: state.session.id) {
+                            sessionRow(state)
+                        }
+                        .buttonStyle(.plain)
                     }
                 }
-                .font(.footnote)
-            }
-            Button("开一个") {
-                let root = newSessionRoot
-                Task { await model.createSession(agent: newSessionAgent, workspaceRoot: root) }
-            }
-            .disabled(newSessionRoot.trimmingCharacters(in: .whitespaces).isEmpty)
-        }
-    }
-
-    // MARK: - 眼镜
-
-    private var glassesSection: some View {
-        Section {
-            LabeledContent("会话", value: describe(model.glassesState))
-            LabeledContent("显示", value: describe(model.displayState))
-            LabeledContent("当前屏", value: describe(model.glassScreen))
-            Button("连接并挂载显示") {
-                Task { await model.connectGlasses() }
-            }
-            Button("断开眼镜", role: .destructive) {
-                Task { await model.disconnectGlasses() }
-            }
-        } header: {
-            Text("眼镜")
-        } footer: {
-            if model.usingMockGlasses {
-                Text("模拟器环境，使用 Mock 眼镜会话。")
+                .background(LC.elev, in: RoundedRectangle(cornerRadius: 20))
             }
         }
     }
 
-    private func describe(_ state: GlassesSessionState) -> String {
-        switch state {
-        case .idle: return "空闲"
-        case .starting: return "启动中"
-        case .started: return "已连接"
-        case .paused: return "被抢占"
-        case .stopping: return "停止中"
-        case .stopped: return "已停止"
-        }
-    }
-
-    private func describe(_ state: GlassesKit.DisplayState) -> String {
-        switch state {
-        case .stopped: return "未挂载"
-        case .starting: return "挂载中"
-        case .started: return "已挂载"
-        case .stopping: return "卸载中"
-        }
-    }
-
-    private func describe(_ screen: GlassScreen) -> String {
-        switch screen {
-        case .sessionList: return "会话列表"
-        case let .transcript(_, page, following):
-            return "流水 第 \(page + 1) 页\(following ? " · 跟随" : "")"
-        case .blockDetail: return "详情"
-        case .approval: return "审批卡"
-        }
-    }
-}
-
-struct SessionRow: View {
-    let state: SessionState
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(state.session.title)
-                .font(.headline)
+    /// agent 过滤：一键只看某个运行时。只给有会话的 agent 出 chip。
+    private var filterChips: some View {
+        let counts = Dictionary(grouping: orderedSessions, by: \.session.agent)
+            .mapValues(\.count)
+        return ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
-                Text(agentLabel(state.session.agent))
-                Text("·")
-                Text(statusLabel(state.session.status))
-                if !state.pendingApprovals.isEmpty {
-                    Text("· 待审批 \(state.pendingApprovals.count)")
-                        .foregroundStyle(.orange)
+                filterChip(nil, label: "全部 \(orderedSessions.count)")
+                ForEach(AgentKind.allCases, id: \.self) { agent in
+                    if let count = counts[agent] {
+                        filterChip(agent, label: "\(agentLabel(agent)) \(count)")
+                    }
                 }
             }
-            .font(.caption)
-            .foregroundStyle(.secondary)
         }
     }
-}
 
-func agentLabel(_ agent: AgentKind) -> String {
-    switch agent {
-    case .codex: return "Codex"
-    case .claude: return "Claude"
-    case .cursor: return "Cursor"
+    private func filterChip(_ agent: AgentKind?, label: String) -> some View {
+        let selected = filter == agent
+        return Button {
+            filter = agent
+        } label: {
+            HStack(spacing: 5) {
+                if let agent {
+                    Circle().fill(LC.agent(agent)).frame(width: 7, height: 7)
+                }
+                Text(label)
+            }
+            .font(.system(size: 12, weight: selected ? .semibold : .medium))
+            .foregroundStyle(selected ? Color(hex: 0x111111) : LC.text2)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 3)
+            .background(selected ? Color(hex: 0xEAEAF0) : LC.elev2, in: Capsule())
+        }
+        .buttonStyle(.plain)
     }
-}
 
-func statusLabel(_ status: SessionStatus) -> String {
-    switch status {
-    case .starting: return "启动中"
-    case .idle: return "空闲"
-    case .running: return "运行中"
-    case .awaitingApproval: return "待审批"
-    case .error: return "出错"
-    case .ended: return "已结束"
+    private func sessionRow(_ state: SessionState) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack(spacing: 8) {
+                AgentBadge(agent: state.session.agent)
+                StatusPill(style: .session(state.session.status))
+                Spacer()
+            }
+            Text(state.session.title)
+                .font(.system(size: 17, weight: .semibold))
+                .foregroundStyle(LC.text)
+                .lineLimit(1)
+            if let last = state.blocks.last {
+                let preview = blockPreview(last)
+                Text(preview.text)
+                    .font(.system(size: 13, design: preview.mono ? .monospaced : .default))
+                    .foregroundStyle(LC.text2)
+                    .lineLimit(1)
+            }
+            HStack(spacing: 6) {
+                Image(systemName: "folder").font(.system(size: 11))
+                Text(metaLine(state.session)).lineLimit(1)
+                // 配了多台电脑才标注归属；单连接架构下所有会话都属于 active 主机
+                if model.hosts.hosts.count > 1, let host = model.hosts.active {
+                    LCChip(fontSize: 10) { Text(host.name) }
+                }
+            }
+            .font(.system(size: 12))
+            .foregroundStyle(LC.text3)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+    }
+
+    private func metaLine(_ session: AgentSession) -> String {
+        var parts = [session.workspaceRoot, relativeTime(fromMs: session.updatedAtMs)]
+        if let model = session.model { parts.append(model) }
+        return parts.filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+
+    private var emptySessionsCard: some View {
+        VStack(spacing: 6) {
+            Text(model.isConnected ? "没有活动会话" : "未连接到 Mac")
+                .font(.system(size: 14))
+                .foregroundStyle(LC.text2)
+            Text(
+                model.isConnected
+                    ? "点右下角 + 开一个"
+                    : "在设置里添加电脑，或点上方主机芯片重连"
+            )
+            .font(.system(size: 12))
+            .foregroundStyle(LC.text3)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 28)
+        .background(LC.elev, in: RoundedRectangle(cornerRadius: 20))
+    }
+
+    private func approvalIcon(_ kind: ApprovalKind) -> String {
+        switch kind {
+        case .shellCommand: return "terminal"
+        case .fileChange: return "doc.text"
+        case .tool: return "wrench.and.screwdriver"
+        case .permission: return "key.fill"
+        }
     }
 }

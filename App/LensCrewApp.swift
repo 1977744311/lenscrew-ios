@@ -1,189 +1,118 @@
-import AgentProtocol
-import BridgeLink
-import GlassRenderer
-import GlassesKit
-import LensCrewCore
 import SwiftUI
 
 @main
 struct LensCrewApp: App {
     var body: some Scene {
         WindowGroup {
-            HomeScreen(model: CrewViewModel())
+            RootView()
         }
     }
 }
 
-@MainActor
-@Observable
-final class CrewViewModel {
-    var settings = BridgeSettings.load()
+enum RootTab {
+    case sessions, glasses, settings
+}
 
-    private(set) var linkState: BridgeLinkState = .disconnected
-    private(set) var sessions: [SessionState] = []
-    private(set) var glassScreen: GlassScreen = .sessionList
-    private(set) var glassesState: GlassesSessionState = .idle
-    private(set) var displayState: GlassesKit.DisplayState = .stopped
-    private(set) var lastError: String?
+/// 根视图：三个 tab + 自定义 dock。
+/// 不用系统 TabView 是因为 mockup 的 dock 右侧有独立的圆形 + 按钮，
+/// 系统 tab bar 塞不进这种布局。
+struct RootView: View {
+    @State private var model = CrewViewModel()
+    @State private var tab: RootTab = .sessions
+    /// 会话导航栈：元素是 sessionID
+    @State private var sessionPath: [String] = []
+    @State private var showNewSession = false
 
-    private let glasses = GlassesRuntime.makeSession()
-    private var connection: HTTPBridgeConnection?
-    private var coordinator: CrewCoordinator?
-    private var pumps: [Task<Void, Never>] = []
+    var body: some View {
+        ZStack(alignment: .bottom) {
+            LC.bg.ignoresSafeArea()
 
-    var usingMockGlasses: Bool { GlassesRuntime.isMock }
-
-    var isConnected: Bool {
-        if case .connected = linkState { return true }
-        return false
-    }
-
-    init() {
-        observeGlasses()
-    }
-
-    // MARK: - bridge
-
-    func connect() async {
-        guard let baseURL = settings.baseURL, settings.isComplete else {
-            lastError = "先把主机、端口和口令填完整"
-            return
-        }
-        await disconnect()
-        settings.save()
-
-        let connection = HTTPBridgeConnection(
-            endpoint: BridgeEndpoint(baseURL: baseURL, token: settings.token)
-        )
-        let coordinator = CrewCoordinator(bridge: connection, glasses: glasses)
-        self.connection = connection
-        self.coordinator = coordinator
-
-        pumps.append(
-            Task { [weak self] in
-                for await state in connection.linkStates {
-                    await MainActor.run { self?.linkState = state }
+            switch tab {
+            case .sessions:
+                NavigationStack(path: $sessionPath) {
+                    HomeScreen(model: model, path: $sessionPath)
+                        .navigationDestination(for: String.self) { sessionID in
+                            SessionScreen(model: model, sessionID: sessionID)
+                        }
                 }
+            case .glasses:
+                GlassesScreen(model: model)
+            case .settings:
+                SettingsScreen(model: model)
             }
-        )
-        pumps.append(
-            Task { [weak self] in
-                for await snapshot in coordinator.snapshots {
-                    await MainActor.run {
-                        self?.sessions = snapshot.sessions
-                        self?.glassScreen = snapshot.glassScreen
-                    }
-                }
-            }
-        )
-        pumps.append(Task { [glasses] in await coordinator.run(glasses: glasses) })
 
-        do {
-            try await connection.connect()
-            // 已经在跑的会话要拉回来，否则手机重启后看不到 Mac 上的现场
-            try await connection.send(.listSessions)
-            lastError = nil
-        } catch {
-            lastError = describe(error)
-        }
-    }
-
-    func disconnect() async {
-        for pump in pumps { pump.cancel() }
-        pumps = []
-        await connection?.disconnect()
-        connection = nil
-        coordinator = nil
-        sessions = []
-        linkState = .disconnected
-    }
-
-    // MARK: - 会话
-
-    func createSession(agent: AgentKind, workspaceRoot: String) async {
-        await run {
-            try await $0.createSession(agent: agent, workspaceRoot: workspaceRoot)
-            await MainActor.run { self.settings.remember(root: workspaceRoot) }
-        }
-    }
-
-    func send(_ text: String, to sessionID: String) async {
-        await run { try await $0.sendMessage(text, to: sessionID) }
-    }
-
-    func interrupt(_ sessionID: String) async {
-        await run { try await $0.interrupt(sessionID) }
-    }
-
-    func resolve(approval: ApprovalRequest, in sessionID: String, optionID: String) async {
-        await run {
-            try await $0.resolveApproval(
-                sessionID: sessionID, approvalID: approval.id, optionID: optionID
-            )
-        }
-    }
-
-    // MARK: - 眼镜
-
-    func connectGlasses() async {
-        do {
-            try await glasses.start()
-            try await glasses.attachDisplay()
-            await coordinator?.displayReattached()
-            lastError = nil
-        } catch {
-            lastError = describe(error)
-        }
-    }
-
-    func disconnectGlasses() async {
-        await glasses.detachDisplay()
-        await glasses.stop()
-    }
-
-    // MARK: - 内部
-
-    private func run(
-        _ body: @escaping @Sendable (CrewCoordinator) async throws -> Void
-    ) async {
-        guard let coordinator else {
-            lastError = "还没连上 bridge"
-            return
-        }
-        do {
-            try await body(coordinator)
-            lastError = nil
-        } catch {
-            lastError = describe(error)
-        }
-    }
-
-    private func observeGlasses() {
-        Task { [glasses] in
-            for await state in glasses.sessionStates {
-                await MainActor.run { self.glassesState = state }
+            // 进了会话页就让位给 composer，dock 只在三个根屏出现
+            if sessionPath.isEmpty {
+                TabDock(tab: $tab) { showNewSession = true }
             }
         }
-        Task { [glasses] in
-            for await state in glasses.displayStates {
-                await MainActor.run { self.displayState = state }
-            }
+        .sheet(isPresented: $showNewSession) {
+            NewSessionSheet(model: model)
         }
-        Task { [glasses] in
-            for await fault in glasses.faults {
-                await MainActor.run { self.lastError = String(describing: fault) }
+        .preferredColorScheme(.dark)
+        .tint(LC.blue)
+        .task {
+            // 启动即连 active 主机；没配置过就等用户去设置页添加
+            if model.hosts.active != nil {
+                await model.connect()
             }
         }
     }
+}
 
-    private func describe(_ error: any Error) -> String {
-        if let linkError = error as? BridgeLinkError {
-            switch linkError {
-            case .notConnected: return "连接已断开"
-            case let .transport(message): return message
-            case let .decoding(message): return "解析失败：\(message)"
+/// 底部 dock：三个 tab + 右侧独立蓝色圆形 + 按钮，毛玻璃背景
+private struct TabDock: View {
+    @Binding var tab: RootTab
+    let newSession: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 12) {
+            HStack(spacing: 0) {
+                tabItem(.sessions, label: "会话", icon: "bubble.left.and.bubble.right")
+                tabItem(.glasses, label: "眼镜", icon: "eyeglasses")
+                tabItem(.settings, label: "设置", icon: "gearshape")
             }
+            Button(action: newSession) {
+                Image(systemName: "plus")
+                    .font(.system(size: 20, weight: .bold))
+                    .foregroundStyle(.white)
+                    .frame(width: 52, height: 52)
+                    .background(LC.blue, in: Circle())
+                    .shadow(color: LC.blue.opacity(0.4), radius: 9, y: 6)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("新会话")
         }
-        return String(describing: error)
+        .padding(.horizontal, 20)
+        .padding(.top, 10)
+        .padding(.bottom, 6)
+        .background {
+            // mockup 的 dock-glass：模糊 + 深色罩 + 顶部发丝线
+            ZStack(alignment: .top) {
+                Rectangle().fill(.ultraThinMaterial)
+                Color(hex: 0x0A0A0C).opacity(0.62)
+                Hairline()
+            }
+            .ignoresSafeArea(edges: .bottom)
+        }
+    }
+
+    private func tabItem(_ target: RootTab, label: String, icon: String) -> some View {
+        let active = tab == target
+        return Button {
+            tab = target
+        } label: {
+            VStack(spacing: 3) {
+                // 统一图标盒高度：眼镜图标是 2:1 宽高比，不包一层会把文字顶歪
+                Image(systemName: icon)
+                    .font(.system(size: 17, weight: .medium))
+                    .frame(height: 20)
+                Text(label)
+                    .font(.system(size: 10.5))
+            }
+            .foregroundStyle(active ? .white : Color(hex: 0xEBEBF5).opacity(0.34))
+            .frame(maxWidth: .infinity)
+        }
+        .buttonStyle(.plain)
     }
 }
