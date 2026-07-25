@@ -138,8 +138,8 @@ public enum GlassScreenComposer {
         }
         let buttons: [GlassNode] = approval.options.map { option in
             .button(
-                label: GlassText.truncate(option.label, to: 10),
-                style: buttonStyle(option.kind),
+                label: buttonLabel(kind: option.kind, scope: option.scope),
+                style: buttonStyle(option.kind, option.scope),
                 actionID: GlassAction.resolveApproval(optionID: option.id).actionID
             )
         }
@@ -223,11 +223,31 @@ public enum GlassScreenComposer {
         return min(max(index, 0), count - 1)
     }
 
-    private static func buttonStyle(_ kind: ApprovalOptionKind) -> GlassButtonStyle {
-        switch kind {
-        case .allow: return .primary
-        case .allowAlways: return .secondary
-        case .deny, .abort: return .outline
+    /// 按钮文案由 kind + scope 推导，不用 adapter 给的 label。
+    /// 三个运行时的原生文案各不相同（"Allow once" / "总是允许" / "acceptForSession"），
+    /// 而在只能 tap 的小屏上，"就这一次"和"永久放行"必须用同一套词区分开。
+    private static func buttonLabel(
+        kind: ApprovalOptionKind, scope: ApprovalScope
+    ) -> String {
+        switch (kind, scope) {
+        case (.allow, .once): return "批准"
+        case (.allow, .session): return "本会话都批"
+        case (.allow, .persistent): return "永久批准"
+        case (.deny, .once): return "拒绝"
+        case (.deny, .session): return "本会话都拒"
+        case (.deny, .persistent): return "永久拒绝"
+        case (.abort, _): return "中断"
+        }
+    }
+
+    /// 只有"就这一次"的批准是主按钮。留痕越久的选项越不该被顺手点到。
+    private static func buttonStyle(
+        _ kind: ApprovalOptionKind, _ scope: ApprovalScope
+    ) -> GlassButtonStyle {
+        switch (kind, scope) {
+        case (.allow, .once): return .primary
+        case (.allow, _): return .secondary
+        case (.deny, _), (.abort, _): return .outline
         }
     }
 

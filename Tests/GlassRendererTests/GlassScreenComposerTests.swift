@@ -53,9 +53,16 @@ struct GlassScreenComposerTests {
             id: "a-1", kind: .shellCommand, title: "运行 rm -rf build",
             detail: "rm -rf build", cwd: "/tmp",
             options: [
-                .init(id: "approved", label: "批准", kind: .allow),
-                .init(id: "approved_for_session", label: "本会话都批", kind: .allowAlways),
-                .init(id: "denied", label: "拒绝", kind: .deny),
+                .init(id: "accept", label: "Approve", kind: .allow, scope: .once),
+                .init(
+                    id: "acceptForSession", label: "Approve for session",
+                    kind: .allow, scope: .session
+                ),
+                .init(
+                    id: "acceptWithAmendment", label: "Always approve",
+                    kind: .allow, scope: .persistent
+                ),
+                .init(id: "decline", label: "Decline", kind: .deny, scope: .once),
             ],
             requestedAtMs: 0
         )
@@ -67,6 +74,34 @@ struct GlassScreenComposerTests {
         for option in approval.options {
             #expect(ids.contains(GlassAction.resolveApproval(optionID: option.id).actionID))
         }
+    }
+
+    /// 三个运行时的原生文案各不相同（"Allow once" / "总是允许" / "acceptForSession"），
+    /// 而在只能 tap 的小屏上，作用范围必须用同一套词区分开——所以按钮文案自己推导，
+    /// 不用 adapter 给的 label。
+    @Test("按钮文案由 kind 与 scope 推导，三档作用范围各不相同")
+    func derivesButtonLabelsFromKindAndScope() {
+        let approval = ApprovalRequest(
+            id: "a-1", kind: .shellCommand, title: "运行 rm -rf build",
+            detail: "rm -rf build", cwd: nil,
+            options: [
+                .init(id: "o1", label: "Allow once", kind: .allow, scope: .once),
+                .init(id: "o2", label: "Allow for session", kind: .allow, scope: .session),
+                .init(id: "o3", label: "Allow always", kind: .allow, scope: .persistent),
+                .init(id: "o4", label: "Reject", kind: .deny, scope: .once),
+                .init(id: "o5", label: "Reject always", kind: .deny, scope: .persistent),
+            ],
+            requestedAtMs: 0
+        )
+        let node = GlassScreenComposer.approvalCard(
+            approval, detailPages: [GlassPage(lines: [])], index: 0
+        )
+        let rendered = texts(in: node)
+        for label in ["批准", "本会话都批", "永久批准", "拒绝", "永久拒绝"] {
+            #expect(rendered.contains(label), "缺少按钮文案 \(label)")
+        }
+        // adapter 的原文不该出现在屏上
+        #expect(!rendered.contains("Allow always"))
     }
 
     @Test("跟随中不显示『最新』按钮，脱离跟随才显示")

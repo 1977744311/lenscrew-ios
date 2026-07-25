@@ -93,7 +93,10 @@ struct TranscriptPaginatorTests {
             .fileChange(
                 id: "f", files: [.init(path: "src/a.ts", added: 1, removed: 0)], status: .ok
             ),
-            .toolCall(id: "t", source: nil, tool: "WebSearch", summary: "查文档", status: .ok),
+            .toolCall(
+                id: "t", source: nil, tool: "WebSearch", summary: "查文档",
+                output: "", status: .ok
+            ),
         ]
         let lines = TranscriptPaginator
             .paginate(blocks: blocks, agent: .claude, budget: budget)

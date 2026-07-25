@@ -126,6 +126,20 @@ export interface CodexFileUpdateChange {
   diff: string;
 }
 
+/** MCP 工具返回体。content 是 MCP 的富内容数组，文本项形如 { type: "text", text } */
+export interface CodexMcpToolCallResult {
+  content: unknown[];
+  structuredContent: unknown;
+}
+
+export interface CodexMcpToolCallError {
+  message: string;
+}
+
+export type CodexDynamicToolCallOutputContentItem =
+  | { type: "inputText"; text: string }
+  | { type: "inputImage"; imageUrl: string };
+
 /**
  * 折不进契约 8 类 TranscriptBlock 的 ThreadItem 类型，一律走 toolCall 兜底。
  * 显式列出而不是用 string 兜，是为了 codex 新增 item 类型时 TS 能报出来。
@@ -167,6 +181,8 @@ export type CodexThreadItem =
       server: string;
       tool: string;
       status: CodexToolCallStatus;
+      result: CodexMcpToolCallResult | null;
+      error: CodexMcpToolCallError | null;
     }
   | {
       type: "dynamicToolCall";
@@ -174,6 +190,7 @@ export type CodexThreadItem =
       namespace: string | null;
       tool: string;
       status: CodexToolCallStatus;
+      contentItems: CodexDynamicToolCallOutputContentItem[] | null;
     }
   | { type: "webSearch"; id: string; query: string }
   | { type: CodexFallbackItemType; id: string };
@@ -227,6 +244,12 @@ export interface CodexThreadSettingsUpdatedParams {
     model: string;
     modelProvider: string;
   };
+}
+
+/** codex 会在 turn 跑起来之后自动给会话起名，threadName 可能缺席 */
+export interface CodexThreadNameUpdatedParams {
+  threadId: string;
+  threadName?: string;
 }
 
 export interface CodexTurnCompletedParams {

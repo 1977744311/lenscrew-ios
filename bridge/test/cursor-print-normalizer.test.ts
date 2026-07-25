@@ -59,7 +59,7 @@ test("-p 整轮流水归一成契约事件序列", () => {
     "blockUpdated:streaming",
     "blockAppended:agentMessage",
     "blockAppended:shellCommand",
-    "blockUpdated:status",
+    "blockUpdated:cwd+status",
     "blockAppended:reasoning",
     "blockUpdated:appendText ×2",
     "blockUpdated:streaming",
@@ -106,8 +106,24 @@ test("result.rejected 映射成 BlockStatus 的 rejected，而不是失败或成
   assert.deepEqual(updates[0], {
     type: "blockUpdated",
     blockId: "toolu_013Tf42Uwp4SvFNusCYUaPkT",
-    patch: { status: "rejected" },
+    patch: { cwd: "/private/tmp/lenscrew-probe/ws", status: "rejected" },
   });
+});
+
+test("shell 的真实工作目录在 completed 时补回来", () => {
+  const events = runFixture();
+  const appended = events.find(
+    (event) => event.type === "blockAppended" && event.block.kind === "shellCommand",
+  );
+  // started 那条 CLI 只给空串，此时确实不知道
+  assert.equal(appended?.type === "blockAppended" && appended.block.kind === "shellCommand" ? appended.block.cwd : "?", null);
+  const update = events.find(
+    (event) => event.type === "blockUpdated" && event.patch.cwd !== undefined,
+  );
+  assert.equal(
+    update?.type === "blockUpdated" ? update.patch.cwd : undefined,
+    "/private/tmp/lenscrew-probe/ws",
+  );
 });
 
 test("-p 全程不产生任何审批事件，与 capabilities.approvals=false 一致", () => {
@@ -118,10 +134,39 @@ test("-p 全程不产生任何审批事件，与 capabilities.approvals=false �
   );
 });
 
-test("usage 落到 turnCompleted", () => {
+test("usage 落到 turnCompleted，缓存命中单列", () => {
   const events = runFixture();
-  assert.deepEqual(events.at(-2), { type: "turnCompleted", inputTokens: 4, outputTokens: 297 });
+  assert.deepEqual(events.at(-2), {
+    type: "turnCompleted",
+    inputTokens: 4,
+    outputTokens: 297,
+    cachedInputTokens: 43670,
+    stopReason: "completed",
+  });
   assert.deepEqual(events.at(-1), { type: "status", status: "idle" });
+});
+
+test("is_error 的收场记成 stopReason failed 并单发一条 error", () => {
+  const normalizer = new CursorPrintNormalizer();
+  const events = normalizer.normalize({
+    type: "result",
+    subtype: "error",
+    is_error: true,
+    result: "上游连接断了",
+    session_id: "s",
+    usage: { inputTokens: 11, outputTokens: 0, cacheReadTokens: 22 },
+  });
+  assert.deepEqual(events, [
+    { type: "error", message: "上游连接断了", fatal: false },
+    {
+      type: "turnCompleted",
+      inputTokens: 11,
+      outputTokens: 0,
+      cachedInputTokens: 22,
+      stopReason: "failed",
+    },
+    { type: "status", status: "error" },
+  ]);
 });
 
 test("print 驱动的 resolveApproval 必须抛错而不是静默吞掉", async () => {

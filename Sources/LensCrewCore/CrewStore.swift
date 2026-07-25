@@ -66,6 +66,10 @@ public struct CrewStore: Sendable, Equatable {
         case .sessionCreated:
             break
 
+        case let .sessionUpdated(_, session):
+            // 只换元数据，流水与待审批照旧
+            state.session = session
+
         case let .sessionStatus(_, _, status):
             state.session.status = status
 

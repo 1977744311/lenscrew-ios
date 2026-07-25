@@ -2,9 +2,11 @@ import type {
   ApprovalKind,
   ApprovalOption,
   ApprovalOptionKind,
+  ApprovalScope,
   BlockStatus,
   PlanStep,
   TranscriptBlockPatch,
+  TurnStopReason,
 } from "../../protocol/events.ts";
 import type { AdapterEvent, ProtocolNormalizer } from "../types.ts";
 import type {
@@ -17,6 +19,7 @@ import type {
   AcpRequestPermissionResult,
   AcpSessionNotificationParams,
   AcpSessionUpdate,
+  AcpStopReason,
   AcpToolCallStatus,
   AcpToolKind,
   AcpWireMessage,
@@ -81,15 +84,38 @@ const toApprovalKind = (kind: AcpToolKind | undefined): ApprovalKind => {
   }
 };
 
-/** 契约没有 denyAlways，reject_always 只能并进 deny——会丢掉「以后都拒」的语义 */
-const toApprovalOptionKind = (kind: AcpPermissionOptionKind): ApprovalOptionKind => {
+/** ACP 的四档权限选项逐一落到契约的 kind + scope，不再有语义损失 */
+const toApprovalChoice = (
+  kind: AcpPermissionOptionKind,
+): { kind: ApprovalOptionKind; scope: ApprovalScope } => {
   switch (kind) {
     case "allow_once":
-      return "allow";
+      return { kind: "allow", scope: "once" };
     case "allow_always":
-      return "allowAlways";
+      return { kind: "allow", scope: "persistent" };
+    case "reject_always":
+      return { kind: "deny", scope: "persistent" };
     default:
-      return "deny";
+      // reject_once 与将来可能冒出来的新档位，一律按最保守的「只拒这一次」解释
+      return { kind: "deny", scope: "once" };
+  }
+};
+
+const toTurnStopReason = (reason: AcpStopReason | undefined): TurnStopReason | null => {
+  switch (reason) {
+    case "end_turn":
+      return "completed";
+    case "cancelled":
+      return "interrupted";
+    case "max_tokens":
+      return "maxTokens";
+    case "refusal":
+      return "refused";
+    // agent 自己撞上了「一轮内最多几次模型请求」的护栏，对用户而言这轮没跑完
+    case "max_turn_requests":
+      return "failed";
+    default:
+      return null;
   }
 };
 
@@ -239,13 +265,15 @@ export class CursorAcpNormalizer implements ProtocolNormalizer<AcpWireMessage> {
           title: singleLine(toolCall.title ?? command ?? "工具调用"),
           detail,
           cwd: this.#cwd,
-          options: params.options.map(
-            (option): ApprovalOption => ({
+          options: params.options.map((option): ApprovalOption => {
+            const choice = toApprovalChoice(option.kind);
+            return {
               id: option.optionId,
               label: option.name,
-              kind: toApprovalOptionKind(option.kind),
-            }),
-          ),
+              kind: choice.kind,
+              scope: choice.scope,
+            };
+          }),
           requestedAtMs: this.#now(),
         },
       },
@@ -290,6 +318,7 @@ export class CursorAcpNormalizer implements ProtocolNormalizer<AcpWireMessage> {
             source: null,
             tool: update.kind ?? "other",
             summary: singleLine(update.title ?? ""),
+            output: "",
             status,
           },
         });
@@ -327,9 +356,17 @@ export class CursorAcpNormalizer implements ProtocolNormalizer<AcpWireMessage> {
         events.push({ type: "blockAppended", block: { kind: "plan", id, steps } });
         return events;
       }
+      case "session_info_update": {
+        const title = update.title;
+        // title 可以是 null，[规范] 表示清空标题；titleResolved 只承载字符串，
+        // 清空就什么都不发，免得把会话标题刷成空白
+        return typeof title === "string" && title !== ""
+          ? [{ type: "titleResolved", title: singleLine(title) }]
+          : [];
+      }
       default:
-        // session_info_update 的 title、available_commands_update、usage_update
-        // 在契约里都没有落点，详见 adapter.ts 顶部记的契约缺口
+        // available_commands_update 是本机 slash 命令清单，usage_update 给的是
+        // 上下文窗口占用而不是本轮用量，两者在契约里都没有落点
         return [];
     }
   }
@@ -360,6 +397,14 @@ export class CursorAcpNormalizer implements ProtocolNormalizer<AcpWireMessage> {
       if (method === "session/prompt") {
         this.#promptInFlight = false;
         events.push(...this.#closeTextBlock());
+        // 这一轮确实结束了，只是结束得不体面；不发 turnCompleted 会话就卡在 running
+        events.push({
+          type: "turnCompleted",
+          inputTokens: null,
+          outputTokens: null,
+          cachedInputTokens: null,
+          stopReason: "failed",
+        });
         events.push({ type: "status", status: "error" });
       }
       return events;
@@ -383,8 +428,14 @@ export class CursorAcpNormalizer implements ProtocolNormalizer<AcpWireMessage> {
       if (result?.stopReason === "refusal") {
         events.push({ type: "error", message: "agent 拒绝继续本轮", fatal: false });
       }
-      // [实测] ACP 的 prompt 响应只有 stopReason，拿不到 token 用量
-      events.push({ type: "turnCompleted", inputTokens: null, outputTokens: null });
+      // [实测] ACP 的 prompt 响应只有 stopReason，拿不到任何 token 用量
+      events.push({
+        type: "turnCompleted",
+        inputTokens: null,
+        outputTokens: null,
+        cachedInputTokens: null,
+        stopReason: toTurnStopReason(result?.stopReason),
+      });
       events.push({ type: "status", status: "idle" });
       return events;
     }

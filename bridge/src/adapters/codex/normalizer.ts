@@ -2,21 +2,23 @@
 // 同一串输入永远得到同一串输出，好让 protocol/fixtures/codex-turn.jsonl 能当回归基线。
 
 import type {
-  ApprovalKind,
   ApprovalOption,
   ApprovalOptionKind,
+  ApprovalScope,
   BlockStatus,
   FileChangeSummary,
   PlanStep,
   SessionStatus,
   TranscriptBlock,
   TranscriptBlockPatch,
+  TurnStopReason,
 } from "../../protocol/events.ts";
 import type { AdapterEvent, ProtocolNormalizer } from "../types.ts";
 import type {
   CodexApplyPatchApprovalParams,
   CodexCommandExecutionApprovalDecision,
   CodexCommandExecutionRequestApprovalParams,
+  CodexDynamicToolCallOutputContentItem,
   CodexErrorParams,
   CodexExecCommandApprovalParams,
   CodexFileChangePatchUpdatedParams,
@@ -27,18 +29,23 @@ import type {
   CodexItemDeltaParams,
   CodexItemStartedParams,
   CodexMcpElicitationRequestParams,
+  CodexMcpToolCallError,
+  CodexMcpToolCallResult,
   CodexPermissionsRequestApprovalParams,
   CodexRequestId,
   CodexServerRequestMethod,
   CodexServerRequestResolvedParams,
+  CodexThreadNameUpdatedParams,
   CodexThreadSettingsUpdatedParams,
   CodexThreadStartedParams,
   CodexThreadStatusChangedParams,
   CodexThreadTokenUsageUpdatedParams,
   CodexThreadItem,
   CodexToolRequestUserInputParams,
+  CodexTurnCompletedParams,
   CodexTurnPlanUpdatedParams,
   CodexTurnStartedParams,
+  CodexTurnStatus,
 } from "./protocol.ts";
 
 /** adapter 要回送给 app-server 的应答体 */
@@ -61,30 +68,32 @@ export interface CodexNormalizerOptions {
   now?: () => number;
 }
 
-const OPTION_LABELS: Record<string, string> = {
-  accept: "批准",
-  acceptForSession: "本会话内始终批准",
-  acceptWithExecpolicyAmendment: "批准并记住同类命令",
-  applyNetworkPolicyAmendment: "批准并放行该域名",
-  decline: "拒绝",
-  cancel: "中止",
-  approved: "批准",
-  approved_for_session: "本会话内始终批准",
-  denied: "拒绝",
-  abort: "中止",
-};
-
-const OPTION_KINDS: Record<string, ApprovalOptionKind> = {
-  accept: "allow",
-  acceptForSession: "allowAlways",
-  acceptWithExecpolicyAmendment: "allowAlways",
-  applyNetworkPolicyAmendment: "allowAlways",
-  decline: "deny",
-  cancel: "abort",
-  approved: "allow",
-  approved_for_session: "allowAlways",
-  denied: "deny",
-  abort: "abort",
+/**
+ * codex 的裁决取值 → 契约的 kind + scope。
+ *
+ * scope 的分档以「批准一次之后，下次同样的操作还会不会再问」为准：
+ *   accept                        只放行这一次
+ *   acceptForSession              本 thread 内不再问，进程退出即失效
+ *   acceptWithExecpolicyAmendment 往 execpolicy 里写一条 prefix_rule，跨会话长期生效
+ *   applyNetworkPolicyAmendment   往网络策略里写一条 host 规则，同样跨会话
+ * 后两者虽然也是"以后别问了"，但落盘位置和存活期跟 session 档完全不同，
+ * 眼镜端必须能一眼分出来，所以归 persistent 而不是和 session 挤在一起。
+ */
+const DECISION_SHAPES: Record<
+  string,
+  { kind: ApprovalOptionKind; scope: ApprovalScope }
+> = {
+  accept: { kind: "allow", scope: "once" },
+  acceptForSession: { kind: "allow", scope: "session" },
+  acceptWithExecpolicyAmendment: { kind: "allow", scope: "persistent" },
+  applyNetworkPolicyAmendment: { kind: "allow", scope: "persistent" },
+  decline: { kind: "deny", scope: "once" },
+  cancel: { kind: "abort", scope: "once" },
+  // 旧版 execCommandApproval / applyPatchApproval 的 ReviewDecision，取值另成一套
+  approved: { kind: "allow", scope: "once" },
+  approved_for_session: { kind: "allow", scope: "session" },
+  denied: { kind: "deny", scope: "once" },
+  abort: { kind: "abort", scope: "once" },
 };
 
 function commandStatus(
@@ -113,7 +122,7 @@ function toolStatus(status: "inProgress" | "completed" | "failed"): BlockStatus 
   }
 }
 
-/** 只按 diff 的 +/- 行数统计；codex 不直接给 added/removed */
+/** codex 不直接给 added/removed，只能数 diff 的 +/- 行 */
 function diffStat(diff: string): { added: number; removed: number } {
   let added = 0;
   let removed = 0;
@@ -127,9 +136,72 @@ function diffStat(diff: string): { added: number; removed: number } {
 
 function fileSummaries(changes: CodexFileUpdateChange[]): FileChangeSummary[] {
   return changes.map((change) => {
+    // 没有 diff 就是真的算不出来，只能报 null；填 0 等于告诉客户端"改了但零增零删"
+    if (typeof change.diff !== "string" || change.diff.length === 0) {
+      return { path: change.path, added: null, removed: null };
+    }
     const stat = diffStat(change.diff);
     return { path: change.path, added: stat.added, removed: stat.removed };
   });
+}
+
+/** MCP 的 content 是富内容数组，文本项形如 { type: "text", text } */
+function mcpToolOutput(
+  result: CodexMcpToolCallResult | null,
+  error: CodexMcpToolCallError | null,
+): string {
+  if (error) return error.message;
+  if (!result) return "";
+  const parts: string[] = [];
+  for (const entry of result.content ?? []) {
+    if (
+      entry !== null &&
+      typeof entry === "object" &&
+      "text" in entry &&
+      typeof entry.text === "string"
+    ) {
+      parts.push(entry.text);
+    } else {
+      parts.push(JSON.stringify(entry));
+    }
+  }
+  if (parts.length === 0 && result.structuredContent != null) {
+    parts.push(JSON.stringify(result.structuredContent));
+  }
+  return parts.join("\n");
+}
+
+function dynamicToolOutput(
+  items: CodexDynamicToolCallOutputContentItem[] | null,
+): string {
+  return (items ?? [])
+    .map((item) => (item.type === "inputText" ? item.text : item.imageUrl))
+    .join("\n");
+}
+
+/**
+ * codex 的 TurnStatus 只有四档，能可靠对上契约的三种。
+ * maxTokens 和 refused 在 codex 这边没有对应取值——上下文超限是以
+ * status=failed + codexErrorInfo=contextWindowExceeded 的形式出现的，
+ * 那是错误而不是截断语义，不硬塞。
+ */
+function stopReasonFor(status: CodexTurnStatus | undefined): TurnStopReason | null {
+  switch (status) {
+    case "completed":
+      return "completed";
+    case "interrupted":
+      return "interrupted";
+    case "failed":
+      return "failed";
+    default:
+      return null;
+  }
+}
+
+/** 眼镜屏一行放不下整条命令/整段计划，标题和摘要都只取第一行并截断 */
+function firstLine(text: string): string {
+  const line = text.split("\n")[0] ?? "";
+  return line.length > 60 ? `${line.slice(0, 57)}...` : line;
 }
 
 function reasoningText(summary: string[], content: string[]): string {
@@ -145,12 +217,25 @@ function decisionOptionId(decision: unknown): string | null {
   return null;
 }
 
-function toApprovalOption(optionId: string): ApprovalOption {
-  return {
-    id: optionId,
-    label: OPTION_LABELS[optionId] ?? optionId,
-    kind: OPTION_KINDS[optionId] ?? "allow",
-  };
+/**
+ * 认不出的裁决直接不给选项，而不是猜一个 kind/scope 顶上。
+ * 契约要求 scope 能被眼镜端当逻辑判断用，猜错等于把"永久放行"画成"就这一次"。
+ * 漏掉也不会卡死：调用方总会补上 decline / cancel 兜底。
+ * label 按契约填运行时原文，客户端不拿它做显示。
+ */
+function toApprovalOption(optionId: string): ApprovalOption | null {
+  const shape = DECISION_SHAPES[optionId];
+  if (!shape) return null;
+  return { id: optionId, label: optionId, kind: shape.kind, scope: shape.scope };
+}
+
+function toApprovalOptions(optionIds: Iterable<string>): ApprovalOption[] {
+  const options: ApprovalOption[] = [];
+  for (const optionId of optionIds) {
+    const option = toApprovalOption(optionId);
+    if (option) options.push(option);
+  }
+  return options;
 }
 
 export class CodexNormalizer
@@ -165,6 +250,7 @@ export class CodexNormalizer
   #lastStatus: SessionStatus | null = null;
   #lastInputTokens: number | null = null;
   #lastOutputTokens: number | null = null;
+  #lastCachedInputTokens: number | null = null;
   #errorSeq = 0;
   #currentTurnId: string | null = null;
 
@@ -204,13 +290,19 @@ export class CodexNormalizer
         return this.#statusEvents("running");
       }
       case "turn/completed":
-        return this.#turnCompleted();
+        return this.#turnCompleted(message.params as CodexTurnCompletedParams);
+      case "thread/name/updated": {
+        const params = message.params as CodexThreadNameUpdatedParams;
+        const title = params.threadName;
+        return title ? [{ type: "titleResolved", title }] : [];
+      }
       case "thread/tokenUsage/updated": {
         const params = message.params as CodexThreadTokenUsageUpdatedParams;
         const last = params.tokenUsage?.last;
         if (last) {
           this.#lastInputTokens = last.inputTokens;
           this.#lastOutputTokens = last.outputTokens;
+          this.#lastCachedInputTokens = last.cachedInputTokens;
         }
         return [];
       }
@@ -298,18 +390,21 @@ export class CodexNormalizer
     return [{ type: "status", status }];
   }
 
-  /** turn 的成败由 thread/status/changed 表达，这里只负责结算 token 用量 */
-  #turnCompleted(): AdapterEvent[] {
+  #turnCompleted(params: CodexTurnCompletedParams): AdapterEvent[] {
     this.#currentTurnId = null;
     const events: AdapterEvent[] = [
       {
         type: "turnCompleted",
         inputTokens: this.#lastInputTokens,
         outputTokens: this.#lastOutputTokens,
+        cachedInputTokens: this.#lastCachedInputTokens,
+        stopReason: stopReasonFor(params.turn?.status),
       },
     ];
+    // 下一轮没推 tokenUsage 就该报 null，不能把这轮的数字漏过去
     this.#lastInputTokens = null;
     this.#lastOutputTokens = null;
+    this.#lastCachedInputTokens = null;
     return events;
   }
 
@@ -471,14 +566,12 @@ export class CodexNormalizer
     params: CodexCommandExecutionRequestApprovalParams,
   ): AdapterEvent[] {
     const results = new Map<string, Record<string, unknown>>();
-    const options: ApprovalOption[] = [];
 
     // availableDecisions 是服务端逐请求给的权威清单，优先照抄
     for (const decision of params.availableDecisions ?? []) {
       const optionId = decisionOptionId(decision);
       if (!optionId || results.has(optionId)) continue;
       results.set(optionId, { decision });
-      options.push(toApprovalOption(optionId));
     }
 
     // 服务端可能不列 decline，但拒绝是手机端必须永远有的兜底动作
@@ -486,9 +579,9 @@ export class CodexNormalizer
       CodexCommandExecutionApprovalDecision[]) {
       if (results.has(fallback)) continue;
       results.set(fallback, { decision: fallback });
-      options.push(toApprovalOption(fallback));
     }
 
+    const options = toApprovalOptions(results.keys());
     this.#register(approvalId, requestId, "item/commandExecution/requestApproval", results);
     const command = params.command ?? "";
     return [
@@ -497,7 +590,7 @@ export class CodexNormalizer
         approval: {
           id: approvalId,
           kind: "shellCommand",
-          title: this.#title(command),
+          title: firstLine(command),
           detail: params.reason ? `${command}\n\n${params.reason}` : command,
           cwd: params.cwd ?? null,
           options,
@@ -513,7 +606,6 @@ export class CodexNormalizer
     params: CodexFileChangeRequestApprovalParams,
   ): AdapterEvent[] {
     const results = new Map<string, Record<string, unknown>>();
-    const options: ApprovalOption[] = [];
     const available = params.availableDecisions ?? [
       "accept",
       "acceptForSession",
@@ -524,14 +616,13 @@ export class CodexNormalizer
       const optionId = decisionOptionId(decision);
       if (!optionId || results.has(optionId)) continue;
       results.set(optionId, { decision });
-      options.push(toApprovalOption(optionId));
     }
     for (const fallback of ["decline", "cancel"] as const) {
       if (results.has(fallback)) continue;
       results.set(fallback, { decision: fallback });
-      options.push(toApprovalOption(fallback));
     }
 
+    const options = toApprovalOptions(results.keys());
     this.#register(approvalId, requestId, "item/fileChange/requestApproval", results);
     const detail = params.grantRoot
       ? `请求写入权限：${params.grantRoot}`
@@ -575,7 +666,7 @@ export class CodexNormalizer
           title: "提升权限",
           detail: params.reason ?? "codex 请求额外的网络或文件系统权限",
           cwd: params.cwd ?? null,
-          options: ["accept", "acceptForSession", "decline"].map(toApprovalOption),
+          options: toApprovalOptions(results.keys()),
           requestedAtMs: this.#startedAt(params),
         },
       },
@@ -605,7 +696,7 @@ export class CodexNormalizer
           title: "工具需要补充输入",
           detail: prompts.length ? prompts.join("\n") : "工具请求用户输入",
           cwd: null,
-          options: [toApprovalOption("decline")],
+          options: toApprovalOptions(results.keys()),
           requestedAtMs: this.#now(),
         },
       },
@@ -631,7 +722,7 @@ export class CodexNormalizer
           title: `${params.serverName} 请求确认`,
           detail: params.message ?? "",
           cwd: null,
-          options: ["decline", "cancel"].map(toApprovalOption),
+          options: toApprovalOptions(results.keys()),
           requestedAtMs: this.#now(),
         },
       },
@@ -658,10 +749,10 @@ export class CodexNormalizer
         approval: {
           id: approvalId,
           kind: "shellCommand",
-          title: this.#title(command),
+          title: firstLine(command),
           detail: params.reason ? `${command}\n\n${params.reason}` : command,
           cwd: params.cwd ?? null,
-          options: [...results.keys()].map(toApprovalOption),
+          options: toApprovalOptions(results.keys()),
           requestedAtMs: this.#now(),
         },
       },
@@ -690,7 +781,7 @@ export class CodexNormalizer
           title: `应用改动（${paths.length} 个文件）`,
           detail: params.reason ? `${paths.join("\n")}\n\n${params.reason}` : paths.join("\n"),
           cwd: null,
-          options: [...results.keys()].map(toApprovalOption),
+          options: toApprovalOptions(results.keys()),
           requestedAtMs: this.#now(),
         },
       },
@@ -699,12 +790,6 @@ export class CodexNormalizer
 
   #startedAt(params: { startedAtMs?: number }): number {
     return typeof params.startedAtMs === "number" ? params.startedAtMs : this.#now();
-  }
-
-  /** 眼镜屏一行放不下整条命令，标题只取第一行并截断 */
-  #title(command: string): string {
-    const firstLine = command.split("\n")[0] ?? "";
-    return firstLine.length > 60 ? `${firstLine.slice(0, 57)}...` : firstLine;
   }
 
   /**
@@ -756,12 +841,14 @@ export class CodexNormalizer
           status: commandStatus(item.status),
         };
       case "mcpToolCall":
+        // item/started 时 result 还是 null，正文要等 item/completed 才补得上
         return {
           kind: "toolCall",
           id: item.id,
           source: item.server,
           tool: item.tool,
           summary: `${item.server} / ${item.tool}`,
+          output: mcpToolOutput(item.result, item.error),
           status: toolStatus(item.status),
         };
       case "dynamicToolCall":
@@ -771,6 +858,7 @@ export class CodexNormalizer
           source: item.namespace,
           tool: item.tool,
           summary: item.namespace ? `${item.namespace}/${item.tool}` : item.tool,
+          output: dynamicToolOutput(item.contentItems),
           status: toolStatus(item.status),
         };
       case "webSearch":
@@ -780,6 +868,8 @@ export class CodexNormalizer
           source: null,
           tool: "webSearch",
           summary: item.query ?? "",
+          // 搜索结果不作为 item 回传，只能留空
+          output: "",
           status: streaming ? "running" : "ok",
         };
       case "plan":
@@ -790,7 +880,8 @@ export class CodexNormalizer
           id: item.id,
           source: null,
           tool: "plan",
-          summary: item.text ?? "",
+          summary: firstLine(item.text ?? ""),
+          output: item.text ?? "",
           status: streaming ? "running" : "ok",
         };
       default:
@@ -800,6 +891,7 @@ export class CodexNormalizer
           source: null,
           tool: item.type,
           summary: "",
+          output: "",
           status: streaming ? "running" : "ok",
         };
     }
@@ -828,9 +920,25 @@ export class CodexNormalizer
           files: fileSummaries(item.changes ?? []),
           status: commandStatus(item.status),
         };
+      // 工具正文走 replaceText（打到 toolCall 的 output），摘要另走 summary 字段
       case "mcpToolCall":
+        return {
+          replaceText: mcpToolOutput(item.result, item.error),
+          status: toolStatus(item.status),
+        };
       case "dynamicToolCall":
-        return { status: toolStatus(item.status) };
+        return {
+          replaceText: dynamicToolOutput(item.contentItems),
+          status: toolStatus(item.status),
+        };
+      case "plan":
+        return {
+          replaceText: item.text ?? "",
+          summary: firstLine(item.text ?? ""),
+          status: "ok",
+        };
+      case "webSearch":
+        return { summary: item.query ?? "", status: "ok" };
       case "userMessage":
         // 用户消息在 item/started 时就是终态，没有可打的补丁
         return null;

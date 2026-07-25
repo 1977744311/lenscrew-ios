@@ -5,9 +5,32 @@
     "session": {
       "id": "s-001",
       "agent": "codex",
+      "nativeId": null,
+      "workspaceRoot": "/Users/dev/project",
+      "title": "project",
+      "model": null,
+      "status": "starting",
+      "capabilities": {
+        "approvals": false,
+        "steering": false,
+        "interrupt": false,
+        "planMode": false,
+        "resume": false,
+        "streamingDeltas": false
+      },
+      "createdAtMs": 1784985600000,
+      "updatedAtMs": 1784985600000
+    }
+  },
+  {
+    "type": "sessionUpdated",
+    "seq": 2,
+    "session": {
+      "id": "s-001",
+      "agent": "codex",
       "nativeId": "thread_abc",
       "workspaceRoot": "/Users/dev/project",
-      "title": "修登录报错",
+      "title": "修登录 500",
       "model": "gpt-5-codex",
       "status": "starting",
       "capabilities": {
@@ -19,18 +42,18 @@
         "streamingDeltas": true
       },
       "createdAtMs": 1784985600000,
-      "updatedAtMs": 1784985600000
+      "updatedAtMs": 1784985600500
     }
   },
   {
     "type": "sessionStatus",
-    "seq": 2,
+    "seq": 3,
     "sessionId": "s-001",
     "status": "running"
   },
   {
     "type": "blockAppended",
-    "seq": 3,
+    "seq": 4,
     "sessionId": "s-001",
     "block": {
       "kind": "userMessage",
@@ -41,7 +64,7 @@
   },
   {
     "type": "blockAppended",
-    "seq": 4,
+    "seq": 5,
     "sessionId": "s-001",
     "block": {
       "kind": "reasoning",
@@ -52,7 +75,7 @@
   },
   {
     "type": "blockAppended",
-    "seq": 5,
+    "seq": 6,
     "sessionId": "s-001",
     "block": {
       "kind": "agentMessage",
@@ -63,7 +86,7 @@
   },
   {
     "type": "blockUpdated",
-    "seq": 6,
+    "seq": 7,
     "sessionId": "s-001",
     "blockId": "b-3",
     "patch": {
@@ -73,13 +96,13 @@
   },
   {
     "type": "blockAppended",
-    "seq": 7,
+    "seq": 8,
     "sessionId": "s-001",
     "block": {
       "kind": "shellCommand",
       "id": "b-4",
       "command": "npm test -- auth",
-      "cwd": "/Users/dev/project",
+      "cwd": null,
       "output": "",
       "exitCode": null,
       "status": "running"
@@ -87,7 +110,7 @@
   },
   {
     "type": "approvalRequested",
-    "seq": 8,
+    "seq": 9,
     "sessionId": "s-001",
     "approval": {
       "id": "a-1",
@@ -96,41 +119,43 @@
       "detail": "npm test -- auth\n工作目录 /Users/dev/project",
       "cwd": "/Users/dev/project",
       "options": [
-        { "id": "approved", "label": "批准", "kind": "allow" },
-        { "id": "approved_for_session", "label": "本次会话都批", "kind": "allowAlways" },
-        { "id": "denied", "label": "拒绝", "kind": "deny" }
+        { "id": "accept", "label": "Approve", "kind": "allow", "scope": "once" },
+        {
+          "id": "acceptForSession",
+          "label": "Approve for session",
+          "kind": "allow",
+          "scope": "session"
+        },
+        {
+          "id": "acceptWithExecpolicyAmendment",
+          "label": "Always approve",
+          "kind": "allow",
+          "scope": "persistent"
+        },
+        { "id": "decline", "label": "Decline", "kind": "deny", "scope": "once" },
+        { "id": "cancel", "label": "Cancel", "kind": "abort", "scope": "once" }
       ],
       "requestedAtMs": 1784985601000
     }
   },
   {
     "type": "approvalSettled",
-    "seq": 9,
+    "seq": 10,
     "sessionId": "s-001",
     "approvalId": "a-1",
-    "optionId": "approved",
+    "optionId": "accept",
     "outcome": "resolved"
   },
   {
     "type": "blockUpdated",
-    "seq": 10,
+    "seq": 11,
     "sessionId": "s-001",
     "blockId": "b-4",
     "patch": {
       "appendText": "PASS auth.test.ts\n",
+      "cwd": "/Users/dev/project",
       "status": "ok",
       "exitCode": 0
-    }
-  },
-  {
-    "type": "blockAppended",
-    "seq": 11,
-    "sessionId": "s-001",
-    "block": {
-      "kind": "fileChange",
-      "id": "b-5",
-      "files": [{ "path": "src/auth.ts", "added": 12, "removed": 3 }],
-      "status": "ok"
     }
   },
   {
@@ -138,17 +163,43 @@
     "seq": 12,
     "sessionId": "s-001",
     "block": {
-      "kind": "toolCall",
-      "id": "b-6",
-      "source": "context7",
-      "tool": "query-docs",
-      "summary": "查 express 错误中间件用法",
+      "kind": "fileChange",
+      "id": "b-5",
+      "files": [
+        { "path": "src/auth.ts", "added": 12, "removed": 3 },
+        { "path": "src/session.ts", "added": null, "removed": null }
+      ],
       "status": "ok"
     }
   },
   {
     "type": "blockAppended",
     "seq": 13,
+    "sessionId": "s-001",
+    "block": {
+      "kind": "toolCall",
+      "id": "b-6",
+      "source": "context7",
+      "tool": "query-docs",
+      "summary": "查 express 错误中间件用法",
+      "output": "",
+      "status": "running"
+    }
+  },
+  {
+    "type": "blockUpdated",
+    "seq": 14,
+    "sessionId": "s-001",
+    "blockId": "b-6",
+    "patch": {
+      "summary": "express 错误中间件需要四个参数",
+      "appendText": "app.use((err, req, res, next) => { ... })",
+      "status": "ok"
+    }
+  },
+  {
+    "type": "blockAppended",
+    "seq": 15,
     "sessionId": "s-001",
     "block": {
       "kind": "plan",
@@ -162,7 +213,7 @@
   },
   {
     "type": "blockAppended",
-    "seq": 14,
+    "seq": 16,
     "sessionId": "s-001",
     "block": {
       "kind": "error",
@@ -172,20 +223,22 @@
   },
   {
     "type": "turnCompleted",
-    "seq": 15,
+    "seq": 17,
     "sessionId": "s-001",
-    "inputTokens": 4210,
-    "outputTokens": 883
+    "inputTokens": 24682,
+    "outputTokens": 883,
+    "cachedInputTokens": 23296,
+    "stopReason": "completed"
   },
   {
     "type": "sessionClosed",
-    "seq": 16,
+    "seq": 18,
     "sessionId": "s-001",
     "reason": "用户关闭"
   },
   {
     "type": "bridgeError",
-    "seq": 17,
+    "seq": 19,
     "sessionId": null,
     "message": "codex app-server 退出",
     "fatal": true

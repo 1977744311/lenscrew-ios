@@ -3,6 +3,7 @@ import type {
   BlockStatus,
   TranscriptBlock,
   TranscriptBlockPatch,
+  TurnStopReason,
 } from "../../protocol/events.ts";
 import type { AdapterEvent, ProtocolNormalizer } from "../types.ts";
 import type {
@@ -98,6 +99,8 @@ export class ClaudeNormalizer implements ProtocolNormalizer<ClaudeMessage> {
       if (init.model) {
         events.push({ type: "modelResolved", model: init.model });
       }
+      // 不发 titleResolved：init 及后续所有帧都不带会话标题，CLI 的标题生成
+      // 是另一条要主动发起的控制请求（会额外烧一次模型调用），拿不到就按契约不发
       events.push({ type: "status", status: "running" });
       return events;
     }
@@ -149,9 +152,10 @@ export class ClaudeNormalizer implements ProtocolNormalizer<ClaudeMessage> {
    * 子 agent（Task 工具）的消息不独立成块，而是压缩进父 toolCall 的 summary。
    *
    * 理由：眼镜屏 600×600，一次 Task 里子 agent 可能产出几十条消息，独立成块会把
-   * 主线冲没。契约里 toolCall.summary 定位就是一行摘要，所以这里累积后截断重写，
-   * 而不是 appendText 无限追加。子 agent 的 thinking 和它自己的工具调用直接丢弃——
-   * 那是实现细节，手机端要看细节应当去看父 Task 的完整输出。
+   * 主线冲没。契约里 toolCall.summary 定位就是一行摘要，所以这里累积后截断重写。
+   * 走 summary 字段而不是 appendText——后者对 toolCall 打的是 output，
+   * 那里留给 Task 自己的 tool_result 正文。子 agent 的 thinking 和它自己的工具调用
+   * 直接丢弃，手机端要看细节应当去看父 Task 的 output。
    */
   private foldSubagent(parentToolUseId: string, blocks: ClaudeContentBlock[]): AdapterEvent[] {
     const parent = this.byToolUseId.get(parentToolUseId);
@@ -171,7 +175,7 @@ export class ClaudeNormalizer implements ProtocolNormalizer<ClaudeMessage> {
       {
         type: "blockUpdated",
         blockId: parent.blockId,
-        patch: { replaceText: condense(merged, SUMMARY_MAX) },
+        patch: { summary: condense(merged, SUMMARY_MAX) },
       },
     ];
   }
@@ -278,10 +282,11 @@ export class ClaudeNormalizer implements ProtocolNormalizer<ClaudeMessage> {
     const status: BlockStatus = block.is_error === true ? "failed" : "ok";
     const output = toolResultText(block);
 
-    // shellCommand 有 output 字段可以承接；fileChange/toolCall 契约里没有输出位，
-    // 只能落 status（见汇报里的契约缺口）。
+    // shellCommand 和 toolCall 的主文本都是 output；fileChange 没有主文本位，只落 status
     const patch: TranscriptBlockPatch =
-      tracked.kind === "shellCommand" ? { appendText: output, status } : { status };
+      tracked.kind === "fileChange" || output.length === 0
+        ? { status }
+        : { appendText: output, status };
 
     return [{ type: "blockUpdated", blockId: tracked.blockId, patch }];
   }
@@ -427,6 +432,11 @@ export class ClaudeNormalizer implements ProtocolNormalizer<ClaudeMessage> {
       type: "turnCompleted",
       inputTokens: typeof usage.input_tokens === "number" ? usage.input_tokens : null,
       outputTokens: typeof usage.output_tokens === "number" ? usage.output_tokens : null,
+      cachedInputTokens:
+        typeof usage.cache_read_input_tokens === "number"
+          ? usage.cache_read_input_tokens
+          : null,
+      stopReason: mapStopReason(message),
     });
 
     if (!message.is_error) {
@@ -507,11 +517,11 @@ function buildToolBlock(
   }
   if (kind === "fileChange") {
     const path = stringField(input, "file_path") || stringField(input, "notebook_path");
-    // Claude 的 tool_use 不带行数增删，契约要求的 added/removed 只能填 0
+    // Claude 的 tool_use 只给路径和内容，增删行数无从得知，按契约必须是 null
     return {
       kind: "fileChange",
       id,
-      files: path ? [{ path, added: 0, removed: 0 }] : [],
+      files: path ? [{ path, added: null, removed: null }] : [],
       status: "running",
     };
   }
@@ -521,6 +531,7 @@ function buildToolBlock(
     source: mcpSource(tool.name),
     tool: tool.name,
     summary: condense(toolSummary(tool), SUMMARY_MAX),
+    output: "",
     status: "running",
   };
 }
@@ -538,11 +549,11 @@ function describeToolInput(
   }
   if (kind === "fileChange") {
     const path = stringField(input, "file_path") || stringField(input, "notebook_path");
-    return path ? { files: [{ path, added: 0, removed: 0 }] } : null;
+    return path ? { files: [{ path, added: null, removed: null }] } : null;
   }
   void cwd;
   const summary = condense(toolSummary(tool), SUMMARY_MAX);
-  return summary ? { replaceText: summary } : null;
+  return summary ? { summary } : null;
 }
 
 function toolSummary(tool: ClaudeToolUseBlock): string {
@@ -575,20 +586,58 @@ function approvalDetail(kind: TrackedKind, request: ClaudeCanUseToolRequest): st
 }
 
 /**
- * allow / deny 两个选项在 2.1.215 上实测可用。
- * allowAlways 只在 CLI 给了 permission_suggestions 时出——实测 Bash 给 addRules、
- * Write 给 setMode，两者都能落成持久放行；没有建议时给这个选项会让客户端承诺做不到的事。
- * abort 走 deny + interrupt，interrupt 字段是[依据文档]，未实测。
+ * scope 而不是 label 才是眼镜端区分"就这一次"和"永久放行"的依据，所以这里的
+ * scope 必须对得上实际回送的裁决：
+ *   once       → {behavior:"allow"}，只放行本次
+ *   persistent → {behavior:"allow", updatedPermissions:<CLI 给的建议>}，会落盘成规则
+ *
+ * persistent 只在 CLI 给了 permission_suggestions 时才出——实测 Bash 给 addRules
+ * （落 localSettings）、Write 给 setMode（切 acceptEdits）。没有建议还给这个选项，
+ * 等于向用户承诺一个 adapter 兑现不了的作用域。
+ *
+ * Claude 没有"本会话内放行"这一档对应物，所以 scope "session" 不产出。
+ * abort 走 deny + interrupt，interrupt 字段[依据文档]未实测。
  */
 function approvalOptions(request: ClaudeCanUseToolRequest): ApprovalOption[] {
-  const options: ApprovalOption[] = [{ id: "allow", label: "允许", kind: "allow" }];
+  const options: ApprovalOption[] = [
+    { id: "allow", label: "允许", kind: "allow", scope: "once" },
+  ];
   const suggestions = request.permission_suggestions;
   if (Array.isArray(suggestions) && suggestions.length > 0) {
-    options.push({ id: "allowAlways", label: "总是允许", kind: "allowAlways" });
+    options.push({
+      id: "allowAlways",
+      label: "总是允许",
+      kind: "allow",
+      scope: "persistent",
+    });
   }
-  options.push({ id: "deny", label: "拒绝", kind: "deny" });
-  options.push({ id: "abort", label: "拒绝并中断", kind: "abort" });
+  options.push({ id: "deny", label: "拒绝", kind: "deny", scope: "once" });
+  options.push({ id: "abort", label: "拒绝并中断", kind: "abort", scope: "once" });
   return options;
+}
+
+/**
+ * 映射到契约的 TurnStopReason。宁可给 null 也不猜：
+ *
+ *   terminal_reason "interrupted"  → interrupted  [依据 CLI 内嵌取值]，未实测
+ *   is_error                       → failed       [实测] OAuth 过期那次
+ *   stop_reason "max_tokens"       → maxTokens    [依据 Anthropic 规范]，未实测
+ *   stop_reason "refusal"          → refused      [依据 Anthropic 规范]，未实测
+ *   terminal_reason "completed" 或 stop_reason "end_turn" → completed  [实测]
+ *
+ * interrupted 排在 is_error 前面：中断大概率也会把 is_error 置起来，
+ * 但"用户按了停"比"失败了"信息量大，不该被 failed 盖掉。
+ * 注意判错只能看 is_error——实测 subtype 在鉴权失败时仍是 "success"。
+ */
+function mapStopReason(message: ClaudeResult): TurnStopReason | null {
+  if (message.terminal_reason === "interrupted") return "interrupted";
+  if (message.is_error) return "failed";
+
+  const stop = message.stop_reason;
+  if (stop === "max_tokens") return "maxTokens";
+  if (stop === "refusal") return "refused";
+  if (message.terminal_reason === "completed" || stop === "end_turn") return "completed";
+  return null;
 }
 
 function toolResultText(block: ClaudeToolResultBlock): string {

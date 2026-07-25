@@ -19,6 +19,15 @@ export type BridgeEventListener = (event: BridgeEvent) => void;
  */
 const MAX_RETAINED_EVENTS = 5000;
 
+/**
+ * 事件里必须放会话的拷贝而不是 record 里那个活对象：
+ * 会话元数据是原地改的，共用引用会让已经发出去、以及留在重放窗口里的旧事件
+ * 跟着变成最新状态——那样事件日志就在谎报历史。
+ */
+function snapshot(session: AgentSession): AgentSession {
+  return { ...session, capabilities: { ...session.capabilities } };
+}
+
 interface SessionRecord {
   session: AgentSession;
   adapter: AgentAdapter;
@@ -175,6 +184,9 @@ export class SessionHub {
 
     try {
       await adapter.start({ workspaceRoot, model, mode, resumeNativeId });
+      // sessionCreated 必须早于 start()，否则启动期间的事件没有会话可归属；
+      // 但真实能力要 start() 之后才确定，所以这里补一次快照修正它。
+      this.#emit(record, { type: "capabilitiesResolved" });
     } catch (error) {
       this.#emit(record, {
         type: "error",
@@ -197,14 +209,23 @@ export class SessionHub {
   ): void {
     record.session.updatedAtMs = Date.now();
 
-    // 只改会话元数据、不上线的事件必须在编号之前返回：
-    // 白吃一个 seq 会在客户端看来就是一次永远补不齐的断档。
-    if (event.type === "nativeIdAssigned") {
-      record.session.nativeId = event.nativeId;
-      return;
-    }
-    if (event.type === "modelResolved") {
-      record.session.model = event.model;
+    // 元数据变更改完就走 sessionUpdated 快照，不各自开一种事件：
+    // 客户端只需要"会话元数据换了一份"，不关心是哪一项换的。
+    if (
+      event.type === "nativeIdAssigned" ||
+      event.type === "modelResolved" ||
+      event.type === "titleResolved" ||
+      event.type === "capabilitiesResolved"
+    ) {
+      if (event.type === "nativeIdAssigned") record.session.nativeId = event.nativeId;
+      if (event.type === "modelResolved") record.session.model = event.model;
+      if (event.type === "titleResolved") record.session.title = event.title;
+      record.session.capabilities = record.adapter.capabilities;
+      this.#publish(record, {
+        type: "sessionUpdated",
+        seq: ++record.seq,
+        session: snapshot(record.session),
+      });
       return;
     }
 
@@ -214,7 +235,7 @@ export class SessionHub {
     let bridgeEvent: BridgeEvent;
     switch (event.type) {
       case "sessionCreated":
-        bridgeEvent = { type: "sessionCreated", seq, session: event.session };
+        bridgeEvent = { type: "sessionCreated", seq, session: snapshot(event.session) };
         break;
       case "status":
         record.session.status = event.status;
@@ -258,6 +279,8 @@ export class SessionHub {
           sessionId,
           inputTokens: event.inputTokens,
           outputTokens: event.outputTokens,
+          cachedInputTokens: event.cachedInputTokens,
+          stopReason: event.stopReason,
         };
         break;
       case "error":
@@ -271,11 +294,15 @@ export class SessionHub {
         break;
     }
 
-    record.log.push(bridgeEvent);
+    this.#publish(record, bridgeEvent);
+  }
+
+  #publish(record: SessionRecord, event: BridgeEvent): void {
+    record.log.push(event);
     if (record.log.length > MAX_RETAINED_EVENTS) {
       record.log.splice(0, record.log.length - MAX_RETAINED_EVENTS);
     }
-    for (const listener of this.#listeners) listener(bridgeEvent);
+    for (const listener of this.#listeners) listener(event);
   }
 
   /** adapter 构造时把这个交给它当 sink */

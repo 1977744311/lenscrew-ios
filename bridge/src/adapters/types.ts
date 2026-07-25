@@ -7,6 +7,7 @@ import type {
   SessionStatus,
   TranscriptBlock,
   TranscriptBlockPatch,
+  TurnStopReason,
 } from "../protocol/events.ts";
 
 /**
@@ -16,6 +17,10 @@ import type {
 export type AdapterEvent =
   | { type: "nativeIdAssigned"; nativeId: string }
   | { type: "modelResolved"; model: string }
+  /** 运行时可能在 turn 中途给会话改名（ACP 实测第一条 update 就会） */
+  | { type: "titleResolved"; title: string }
+  /** start() 之后真实能力才确定，adapter 用它把修正后的能力发出来 */
+  | { type: "capabilitiesResolved" }
   | { type: "status"; status: SessionStatus }
   | { type: "blockAppended"; block: TranscriptBlock }
   | { type: "blockUpdated"; blockId: string; patch: TranscriptBlockPatch }
@@ -30,14 +35,19 @@ export type AdapterEvent =
       type: "turnCompleted";
       inputTokens: number | null;
       outputTokens: number | null;
+      cachedInputTokens: number | null;
+      stopReason: TurnStopReason | null;
     }
   | { type: "error"; message: string; fatal: boolean };
 
 /**
- * 原生协议消息 → 统一事件的纯翻译器。
+ * 原生协议消息 → 统一事件的翻译器。
  *
- * 拆成纯函数是为了能脱离进程和网络做单测：三个运行时的真实输出录在
- * protocol/fixtures/ 里，normalizer 喂进去应当得到确定的事件序列。
+ * 不做 I/O，且对消息序列确定：同样的消息序列必然得到同样的事件序列，
+ * 因此可以脱离进程和网络，直接拿 protocol/fixtures/ 里录的真实输出做单测。
+ *
+ * 注意它**不是无状态的**——三个运行时的增量消息都不带块 id、
+ * JSON-RPC 响应也不带方法名，翻译必须记住前文。
  * 进程拉起、stdio 分帧、请求应答这些副作用留在 AgentAdapter 实现里。
  */
 export interface ProtocolNormalizer<TMessage> {
@@ -53,11 +63,25 @@ export interface AdapterStartOptions {
   resumeNativeId: string | null;
 }
 
+/**
+ * 事件出口由构造函数注入（`AdapterEventSink`），方法签名里看不到——
+ * 实现新 adapter 时别漏。
+ */
 export interface AgentAdapter {
   readonly kind: AgentKind;
+  /**
+   * **start() resolve 之前不可信**：几个运行时的真实能力取决于启动参数或握手结果
+   * （claude 的 approvals 看启动时带不带权限 flag，cursor 的 resume 要等 ACP 自陈）。
+   * 修正后的能力由 SessionHub 在 start() 之后统一发一条快照出去，
+   * adapter **不要**自己再发 `capabilitiesResolved`，否则会多广播一次。
+   */
   readonly capabilities: AgentCapabilities;
 
   start(options: AdapterStartOptions): Promise<void>;
+  /**
+   * 消息被运行时接收即返回，**不等这一轮跑完**。
+   * 不这样定的话，手机上点一次发送要等整轮结束才拿到回执。
+   */
   sendMessage(text: string): Promise<void>;
   interrupt(): Promise<void>;
   /**

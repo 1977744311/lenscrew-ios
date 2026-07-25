@@ -148,8 +148,15 @@ export interface ClaudeUsage {
 }
 
 /**
- * [实测] 陷阱：subtype 恒为 "success"，鉴权失败那次也是 "success"，
- * 判错必须看 is_error，不能看 subtype。
+ * [实测] 陷阱：subtype 在实测到的三轮里恒为 "success"，鉴权失败那次也是 "success"，
+ * 判错只能看 is_error。CLI 里另有 "error_max_turns"、"error_during_execution"
+ * 两个 subtype[依据二进制内嵌字符串]，未实测，但它们同样会带 is_error。
+ *
+ * stop_reason / terminal_reason 是两套正交的收尾标记：
+ * 前者是 Anthropic 模型侧的（end_turn / max_tokens / refusal / stop_sequence），
+ * 后者是 CLI 会话侧的。[实测] 成功轮 end_turn + completed，
+ * 鉴权失败轮 stop_sequence + api_error——注意失败时 stop_reason 仍是个正常值，
+ * 所以不能只看 stop_reason 判成败。
  */
 export interface ClaudeResult {
   type: "result";
@@ -158,6 +165,7 @@ export interface ClaudeResult {
   result?: string;
   session_id?: string;
   usage?: ClaudeUsage;
+  stop_reason?: string | null;
   terminal_reason?: string;
 }
 

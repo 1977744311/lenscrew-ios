@@ -6,13 +6,22 @@ public enum BlockStatus: String, Sendable, Codable {
 
 public struct FileChangeSummary: Sendable, Equatable, Codable {
     public var path: String
-    public var added: Int
-    public var removed: Int
+    /// 增删行数。不是所有运行时都给得出，拿不到就是 nil——
+    /// 填 0 会让客户端显示 "+0 −0"，那是在撒谎。
+    public var added: Int?
+    public var removed: Int?
 
-    public init(path: String, added: Int, removed: Int) {
+    public init(path: String, added: Int?, removed: Int?) {
         self.path = path
         self.added = added
         self.removed = removed
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(path, forKey: .path)
+        try container.encode(added, forKey: .added)
+        try container.encode(removed, forKey: .removed)
     }
 }
 
@@ -43,7 +52,8 @@ public enum TranscriptBlock: Sendable, Equatable {
     )
     case fileChange(id: String, files: [FileChangeSummary], status: BlockStatus)
     case toolCall(
-        id: String, source: String?, tool: String, summary: String, status: BlockStatus
+        id: String, source: String?, tool: String, summary: String,
+        output: String, status: BlockStatus
     )
     case plan(id: String, steps: [PlanStep])
     case error(id: String, message: String)
@@ -55,7 +65,7 @@ public enum TranscriptBlock: Sendable, Equatable {
         case let .reasoning(id, _, _): return id
         case let .shellCommand(id, _, _, _, _, _): return id
         case let .fileChange(id, _, _): return id
-        case let .toolCall(id, _, _, _, _): return id
+        case let .toolCall(id, _, _, _, _, _): return id
         case let .plan(id, _): return id
         case let .error(id, _): return id
         }
@@ -126,6 +136,7 @@ extension TranscriptBlock: Codable {
                 source: try container.decodeIfPresent(String.self, forKey: .source),
                 tool: try container.decode(String.self, forKey: .tool),
                 summary: try container.decode(String.self, forKey: .summary),
+                output: try container.decode(String.self, forKey: .output),
                 status: try container.decode(BlockStatus.self, forKey: .status)
             )
         case "plan":
@@ -160,10 +171,11 @@ extension TranscriptBlock: Codable {
         case let .fileChange(_, files, status):
             try container.encode(files, forKey: .files)
             try container.encode(status, forKey: .status)
-        case let .toolCall(_, source, tool, summary, status):
+        case let .toolCall(_, source, tool, summary, output, status):
             try container.encode(source, forKey: .source)
             try container.encode(tool, forKey: .tool)
             try container.encode(summary, forKey: .summary)
+            try container.encode(output, forKey: .output)
             try container.encode(status, forKey: .status)
         case let .plan(_, steps):
             try container.encode(steps, forKey: .steps)
@@ -175,25 +187,36 @@ extension TranscriptBlock: Codable {
 
 /// 增量更新。TS 侧是可选属性（`appendText?: string`），键要么缺席要么有值、
 /// 不会是 null，因此这里全部用 encodeIfPresent。
+///
+/// `appendText` / `replaceText` 作用在每种块各自的主文本字段上：
+/// 消息类是 text，shellCommand 与 toolCall 是 output，error 是 message，
+/// fileChange 与 plan 没有主文本、两个字段都被忽略。
 public struct TranscriptBlockPatch: Sendable, Equatable, Codable {
     public var appendText: String?
     public var replaceText: String?
     public var streaming: Bool?
     public var status: BlockStatus?
     public var exitCode: Int?
+    /// 只对 shellCommand 有意义。有的运行时到命令结束才给得出工作目录
+    public var cwd: String?
+    /// 只对 toolCall 有意义
+    public var summary: String?
     public var files: [FileChangeSummary]?
     public var steps: [PlanStep]?
 
     public init(
         appendText: String? = nil, replaceText: String? = nil, streaming: Bool? = nil,
-        status: BlockStatus? = nil, exitCode: Int? = nil,
-        files: [FileChangeSummary]? = nil, steps: [PlanStep]? = nil
+        status: BlockStatus? = nil, exitCode: Int? = nil, cwd: String? = nil,
+        summary: String? = nil, files: [FileChangeSummary]? = nil,
+        steps: [PlanStep]? = nil
     ) {
         self.appendText = appendText
         self.replaceText = replaceText
         self.streaming = streaming
         self.status = status
         self.exitCode = exitCode
+        self.cwd = cwd
+        self.summary = summary
         self.files = files
         self.steps = steps
     }
@@ -222,17 +245,18 @@ extension TranscriptBlock {
             )
         case let .shellCommand(id, command, cwd, output, exitCode, status):
             return .shellCommand(
-                id: id, command: command, cwd: cwd, output: mergedText(output),
+                id: id, command: command, cwd: patch.cwd ?? cwd, output: mergedText(output),
                 exitCode: patch.exitCode ?? exitCode, status: patch.status ?? status
             )
         case let .fileChange(id, files, status):
             return .fileChange(
                 id: id, files: patch.files ?? files, status: patch.status ?? status
             )
-        case let .toolCall(id, source, tool, summary, status):
+        case let .toolCall(id, source, tool, summary, output, status):
             return .toolCall(
                 id: id, source: source, tool: tool,
-                summary: patch.replaceText ?? summary, status: patch.status ?? status
+                summary: patch.summary ?? summary, output: mergedText(output),
+                status: patch.status ?? status
             )
         case let .plan(id, steps):
             return .plan(id: id, steps: patch.steps ?? steps)

@@ -143,6 +143,11 @@ export class CodexAdapter implements AgentAdapter {
     }
   }
 
+  /**
+   * 契约要求"被接收即返回"，这里等的 turn/start 响应正好就是接收回执：
+   * 实测它在 turn 真正开跑之前就返回了 { turn: { status: "inProgress" } }，
+   * 整轮的产出全部走通知推送，不占用这个 Promise。
+   */
   async sendMessage(text: string): Promise<void> {
     const threadId = this.#requireThreadId();
     const input = [{ type: "text" as const, text, text_elements: [] }];

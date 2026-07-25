@@ -44,7 +44,7 @@ struct ContractFixtureTests {
         }
     }
 
-    @Test("fixture 覆盖了全部九种事件")
+    @Test("fixture 覆盖了全部十种事件")
     func coversEveryEventType() throws {
         let data = try Data(contentsOf: fixtureURL("bridge-events.json"))
         let rawEvents = try #require(
@@ -52,11 +52,40 @@ struct ContractFixtureTests {
         )
         let types = Set(rawEvents.compactMap { $0["type"] as? String })
         let expected: Set<String> = [
-            "sessionCreated", "sessionStatus", "sessionClosed", "blockAppended",
-            "blockUpdated", "approvalRequested", "approvalSettled", "turnCompleted",
-            "bridgeError",
+            "sessionCreated", "sessionUpdated", "sessionStatus", "sessionClosed",
+            "blockAppended", "blockUpdated", "approvalRequested", "approvalSettled",
+            "turnCompleted", "bridgeError",
         ]
         #expect(types == expected)
+    }
+
+    /// 三档作用范围是安全语义：眼镜上"就这一次"和"永久放行"必须能被区分开，
+    /// fixture 里必须三档都在，否则客户端很容易只按 kind 处理就上线了。
+    @Test("fixture 覆盖了审批的三档作用范围")
+    func coversEveryApprovalScope() throws {
+        let data = try Data(contentsOf: fixtureURL("bridge-events.json"))
+        let rawEvents = try #require(
+            JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+        )
+        let options = rawEvents
+            .compactMap { ($0["approval"] as? [String: Any])?["options"] as? [[String: Any]] }
+            .flatMap { $0 }
+        #expect(Set(options.compactMap { $0["scope"] as? String }) == ["once", "session", "persistent"])
+        #expect(Set(options.compactMap { $0["kind"] as? String }) == ["allow", "deny", "abort"])
+    }
+
+    /// 行数增删拿不到时必须是 null，填 0 会被读成"改了但没变化"
+    @Test("fileChange 允许行数为空")
+    func allowsUnknownDiffStats() throws {
+        let data = try Data(contentsOf: fixtureURL("bridge-events.json"))
+        let rawEvents = try #require(
+            JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+        )
+        let files = rawEvents
+            .compactMap { ($0["block"] as? [String: Any])?["files"] as? [[String: Any]] }
+            .flatMap { $0 }
+        #expect(files.contains { $0["added"] is NSNull })
+        #expect(files.contains { ($0["added"] as? Int) != nil })
     }
 
     @Test("fixture 覆盖了全部八类流水块")

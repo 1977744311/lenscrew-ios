@@ -176,6 +176,7 @@ export class CursorPrintNormalizer implements ProtocolNormalizer<CursorPrintMess
           source: null,
           tool: variant.tool,
           summary: descriptionOf(variant.value),
+          output: "",
           status: "running",
         },
       });
@@ -186,6 +187,10 @@ export class CursorPrintNormalizer implements ProtocolNormalizer<CursorPrintMess
     if (shell !== undefined) {
       const rejected = shell.result?.rejected;
       const success = shell.result?.success;
+      // started 时 workingDirectory 恒为空串，真实路径只在 result 里露一次，
+      // 现在契约的 patch 有 cwd 字段，补得回去了
+      const workingDirectory = rejected?.workingDirectory ?? success?.workingDirectory;
+      if (workingDirectory) patch.cwd = workingDirectory;
       if (rejected !== undefined) {
         patch.status = "rejected";
         if (rejected.reason) patch.appendText = rejected.reason;
@@ -218,6 +223,10 @@ export class CursorPrintNormalizer implements ProtocolNormalizer<CursorPrintMess
       type: "turnCompleted",
       inputTokens: message.usage?.inputTokens ?? null,
       outputTokens: message.usage?.outputTokens ?? null,
+      cachedInputTokens: message.usage?.cacheReadTokens ?? null,
+      // -p 只有「跑完了」和「出错了」两种收场：被打断时它根本不吐 result 行（实测），
+      // interrupted 由 adapter 在子进程退出时补
+      stopReason: message.is_error ? "failed" : "completed",
     });
     events.push({ type: "status", status: message.is_error ? "error" : "idle" });
     return events;

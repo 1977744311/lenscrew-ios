@@ -79,6 +79,7 @@ export class CursorAdapter implements AgentAdapter {
   #printNormalizer = new CursorPrintNormalizer();
   #nativeId: string | null = null;
   #closing = false;
+  #printInterrupted = false;
 
   /**
    * adapter 自己也要记一份「发出去的请求」：normalizer 那份是为了翻译事件，
@@ -134,7 +135,11 @@ export class CursorAdapter implements AgentAdapter {
 
   async interrupt(): Promise<void> {
     if (this.#drive === "print") {
-      this.#child?.kill("SIGINT");
+      if (this.#child === null) return;
+      // [实测] -p 被 SIGINT 打断后一行 result 都不吐，直接以 130 退出。
+      // turnCompleted 只能由这里补，否则会话永远停在 running
+      this.#printInterrupted = true;
+      this.#child.kill("SIGINT");
       return;
     }
     const sessionId = this.#nativeId;
@@ -354,6 +359,21 @@ export class CursorAdapter implements AgentAdapter {
       if (this.#child === child) this.#child = null;
       this.#failPending(`cursor-agent 已退出（code ${code ?? "null"}）`);
       if (this.#closing) return;
+      if (this.#printInterrupted) {
+        this.#printInterrupted = false;
+        // 130 是我们自己发的 SIGINT 打出来的，不是故障
+        this.#emitAll([
+          {
+            type: "turnCompleted",
+            inputTokens: null,
+            outputTokens: null,
+            cachedInputTokens: null,
+            stopReason: "interrupted",
+          },
+          { type: "status", status: "idle" },
+        ]);
+        return;
+      }
       if (code !== 0 && code !== null) {
         this.#emit({
           type: "error",

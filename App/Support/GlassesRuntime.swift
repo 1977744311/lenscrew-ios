@@ -71,9 +71,12 @@ enum DemoFeed {
                     detail: "npm test -- auth\n工作目录 /Users/dev/project",
                     cwd: "/Users/dev/project",
                     options: [
-                        .init(id: "approved", label: "批准", kind: .allow),
-                        .init(id: "approved_for_session", label: "本会话都批", kind: .allowAlways),
-                        .init(id: "denied", label: "拒绝", kind: .deny),
+                        .init(id: "accept", label: "Approve", kind: .allow, scope: .once),
+                        .init(
+                            id: "acceptForSession", label: "Approve for session",
+                            kind: .allow, scope: .session
+                        ),
+                        .init(id: "decline", label: "Decline", kind: .deny, scope: .once),
                     ],
                     requestedAtMs: 0
                 )

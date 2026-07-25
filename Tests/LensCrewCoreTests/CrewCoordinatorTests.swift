@@ -30,8 +30,8 @@ struct CrewCoordinatorTests {
             id: id, kind: .shellCommand, title: "运行 npm test",
             detail: "npm test -- auth", cwd: "/tmp",
             options: [
-                .init(id: "approved", label: "批准", kind: .allow),
-                .init(id: "denied", label: "拒绝", kind: .deny),
+                .init(id: "accept", label: "Approve", kind: .allow, scope: .once),
+                .init(id: "decline", label: "Decline", kind: .deny, scope: .once),
             ],
             requestedAtMs: 0
         )
@@ -60,8 +60,8 @@ struct CrewCoordinatorTests {
             await coordinator.screen == .approval(sessionID: "s1", approvalID: "a1", page: 0)
         )
         let payload = try #require(await lastPayload(glasses))
-        #expect(payload.contains("approve:approved"))
-        #expect(payload.contains("approve:denied"))
+        #expect(payload.contains("approve:accept"))
+        #expect(payload.contains("approve:decline"))
     }
 
     @Test("眼镜上点批准会把裁决发回 bridge，但不抢先撤卡")
@@ -76,11 +76,11 @@ struct CrewCoordinatorTests {
         await coordinator.ingest(
             .approvalRequested(seq: 2, sessionID: "s1", approval: approval("a1"))
         )
-        await coordinator.tap(actionID: GlassAction.resolveApproval(optionID: "approved").actionID)
+        await coordinator.tap(actionID: GlassAction.resolveApproval(optionID: "accept").actionID)
 
         #expect(
             bridge.commands.contains(
-                .resolveApproval(sessionID: "s1", approvalID: "a1", optionID: "approved")
+                .resolveApproval(sessionID: "s1", approvalID: "a1", optionID: "accept")
             )
         )
         // bridge 还没确认，卡必须还在
@@ -91,7 +91,7 @@ struct CrewCoordinatorTests {
         await coordinator.ingest(
             .approvalSettled(
                 seq: 3, sessionID: "s1", approvalID: "a1",
-                optionID: "approved", outcome: .resolved
+                optionID: "accept", outcome: .resolved
             )
         )
         #expect(await coordinator.screen == .sessionList)

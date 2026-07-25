@@ -68,6 +68,10 @@ export class ClaudeAdapter implements AgentAdapter {
    * resume          [未实测] CLI 有 --resume <session_id>，本机 OAuth 过期没法验证
    *                 续接后的历史是否完整。
    * streamingDeltas [实测] --include-partial-messages 产出 content_block_delta。
+   *
+   * 这里的能力不随握手结果变化——审批那套 flag 是 start() 写死带上的，
+   * 所以没有需要 adapter 自己发 capabilitiesResolved 的时机，SessionHub 在
+   * start() 之后统一补一发就够了，adapter 再发一次只会多刷一次 sessionUpdated。
    */
   readonly capabilities: AgentCapabilities = {
     approvals: true,

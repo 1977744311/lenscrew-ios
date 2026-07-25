@@ -141,9 +141,13 @@ public enum TranscriptPaginator {
                 )
             ]
             for file in files.prefix(3) {
+                let stat = diffStat(file)
                 lines.append(
                     GlassLine(
-                        "\(GlassText.truncate(lastComponent(file.path), to: budget.metaChars - 10)) +\(file.added) −\(file.removed)",
+                        GlassText.truncate(
+                            lastComponent(file.path),
+                            to: budget.metaChars - GlassText.width(stat) - 1
+                        ) + stat,
                         style: .meta, color: .secondary, actionID: action
                     )
                 )
@@ -158,7 +162,7 @@ public enum TranscriptPaginator {
             }
             return lines
 
-        case let .toolCall(id, source, tool, summary, status):
+        case let .toolCall(id, source, tool, summary, _, status):
             let action = GlassAction.openBlock(id).actionID
             let title = source.map { "\($0) · \(tool)" } ?? tool
             var lines = [
@@ -218,9 +222,26 @@ public enum TranscriptPaginator {
             var lines = [GlassLine("改动 · \(statusText(status))", style: .heading)]
             for file in files {
                 lines.append(GlassLine(file.path, style: .meta, color: .secondary))
-                lines.append(
-                    GlassLine("+\(file.added) −\(file.removed)", style: .meta, color: .secondary)
-                )
+                let stat = diffStat(file)
+                if !stat.isEmpty {
+                    lines.append(
+                        GlassLine(
+                            stat.trimmingCharacters(in: .whitespaces),
+                            style: .meta, color: .secondary
+                        )
+                    )
+                }
+            }
+            return lines
+
+        case let .toolCall(_, source, tool, summary, output, status):
+            var lines = [
+                GlassLine(source.map { "\($0) · \(tool)" } ?? tool, style: .heading),
+                GlassLine(statusText(status), style: .meta, color: .secondary),
+            ]
+            lines += wrapped(summary, style: .body, budget: budget)
+            lines += wrapped(output, style: .meta, budget: budget).map {
+                GlassLine($0.text, style: .meta, color: .secondary)
             }
             return lines
 
@@ -249,6 +270,17 @@ public enum TranscriptPaginator {
 
     private static func firstLine(_ text: String) -> String {
         String(text.split(separator: "\n", omittingEmptySubsequences: false).first ?? "")
+    }
+
+    /// 行数增删不是每个运行时都给得出。给不出时留空，
+    /// 而不是显示 "+0 −0" —— 那会被读成"改了但没变化"。
+    private static func diffStat(_ file: FileChangeSummary) -> String {
+        switch (file.added, file.removed) {
+        case let (added?, removed?): return " +\(added) −\(removed)"
+        case let (added?, nil): return " +\(added)"
+        case let (nil, removed?): return " −\(removed)"
+        case (nil, nil): return ""
+        }
     }
 
     private static func lastComponent(_ path: String) -> String {

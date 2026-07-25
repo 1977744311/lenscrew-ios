@@ -5,18 +5,27 @@ public enum ApprovalKind: String, Sendable, Codable {
 }
 
 public enum ApprovalOptionKind: String, Sendable, Codable {
-    case allow, allowAlways, deny, abort
+    case allow, deny, abort
+}
+
+/// 裁决的作用范围。三个运行时都区分这三档，而且差别是安全性的而非便利性的。
+/// 眼镜上用户是在 600×600 屏上按按钮，"永久放行"和"就这一次"必须一眼可辨，
+/// 不能只靠 label 文案——label 是给人读的，不该拿来做逻辑判断。
+public enum ApprovalScope: String, Sendable, Codable {
+    case once, session, persistent
 }
 
 public struct ApprovalOption: Sendable, Equatable, Codable, Identifiable {
     public var id: String
     public var label: String
     public var kind: ApprovalOptionKind
+    public var scope: ApprovalScope
 
-    public init(id: String, label: String, kind: ApprovalOptionKind) {
+    public init(id: String, label: String, kind: ApprovalOptionKind, scope: ApprovalScope) {
         self.id = id
         self.label = label
         self.kind = kind
+        self.scope = scope
     }
 }
 

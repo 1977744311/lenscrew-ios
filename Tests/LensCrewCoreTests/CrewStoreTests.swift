@@ -98,7 +98,8 @@ struct CrewStoreTests {
         store.apply(created("a"))
         let approval = ApprovalRequest(
             id: "ap1", kind: .shellCommand, title: "运行 ls", detail: "ls",
-            cwd: nil, options: [.init(id: "approved", label: "批准", kind: .allow)],
+            cwd: nil,
+            options: [.init(id: "accept", label: "Approve", kind: .allow, scope: .once)],
             requestedAtMs: 0
         )
         store.apply(.approvalRequested(seq: 2, sessionID: "a", approval: approval))
@@ -108,7 +109,7 @@ struct CrewStoreTests {
         store.apply(
             .approvalSettled(
                 seq: 3, sessionID: "a", approvalID: "ap1",
-                optionID: "approved", outcome: .resolved
+                optionID: "accept", outcome: .resolved
             )
         )
         #expect(store.sessions["a"]?.pendingApprovals.isEmpty == true)
@@ -126,7 +127,10 @@ struct CrewStoreTests {
             )
         )
         store.apply(
-            .turnCompleted(seq: 3, sessionID: "a", inputTokens: 10, outputTokens: 20)
+            .turnCompleted(
+                seq: 3, sessionID: "a", inputTokens: 10, outputTokens: 20,
+                cachedInputTokens: 8, stopReason: .completed
+            )
         )
         #expect(
             store.sessions["a"]?.blocks == [
@@ -150,7 +154,10 @@ struct CrewStoreTests {
             )
         )
         store.apply(
-            .turnCompleted(seq: 3, sessionID: "a", inputTokens: nil, outputTokens: nil)
+            .turnCompleted(
+                seq: 3, sessionID: "a", inputTokens: nil, outputTokens: nil,
+                cachedInputTokens: nil, stopReason: nil
+            )
         )
         #expect(store.sessions["a"]?.session.status == .awaitingApproval)
     }

@@ -2,8 +2,18 @@ import Foundation
 
 /// bridge → 客户端的事件。每条带会话内单调递增的 seq：
 /// 手机和眼镜都可能随时断线，重连时用 `.subscribe(fromSeq:)` 补齐，而不是重拉整个会话。
+/// turn 的结束原因。被 token 上限截断和正常说完是两回事，
+/// 只给一个 turnCompleted 会把它们抹平。运行时给不出时为 nil。
+public enum TurnStopReason: String, Sendable, Codable {
+    case completed, interrupted, maxTokens, refused, failed
+}
+
 public enum BridgeEvent: Sendable, Equatable {
     case sessionCreated(seq: Int, session: AgentSession)
+    /// 会话元数据快照刷新（标题、model、nativeId、capabilities）。
+    /// 只替换会话元数据，保留已有流水——capabilities 要 start() 之后才确定，
+    /// 而 sessionCreated 必须早于 start()，否则启动期间的事件没有归属。
+    case sessionUpdated(seq: Int, session: AgentSession)
     case sessionStatus(seq: Int, sessionID: String, status: SessionStatus)
     case sessionClosed(seq: Int, sessionID: String, reason: String)
     case blockAppended(seq: Int, sessionID: String, block: TranscriptBlock)
@@ -16,20 +26,22 @@ public enum BridgeEvent: Sendable, Equatable {
         optionID: String?, outcome: ApprovalOutcome
     )
     case turnCompleted(
-        seq: Int, sessionID: String, inputTokens: Int?, outputTokens: Int?
+        seq: Int, sessionID: String, inputTokens: Int?, outputTokens: Int?,
+        cachedInputTokens: Int?, stopReason: TurnStopReason?
     )
     case bridgeError(seq: Int, sessionID: String?, message: String, fatal: Bool)
 
     public var seq: Int {
         switch self {
         case let .sessionCreated(seq, _): return seq
+        case let .sessionUpdated(seq, _): return seq
         case let .sessionStatus(seq, _, _): return seq
         case let .sessionClosed(seq, _, _): return seq
         case let .blockAppended(seq, _, _): return seq
         case let .blockUpdated(seq, _, _, _): return seq
         case let .approvalRequested(seq, _, _): return seq
         case let .approvalSettled(seq, _, _, _, _): return seq
-        case let .turnCompleted(seq, _, _, _): return seq
+        case let .turnCompleted(seq, _, _, _, _, _): return seq
         case let .bridgeError(seq, _, _, _): return seq
         }
     }
@@ -38,13 +50,14 @@ public enum BridgeEvent: Sendable, Equatable {
     public var sessionID: String? {
         switch self {
         case let .sessionCreated(_, session): return session.id
+        case let .sessionUpdated(_, session): return session.id
         case let .sessionStatus(_, id, _): return id
         case let .sessionClosed(_, id, _): return id
         case let .blockAppended(_, id, _): return id
         case let .blockUpdated(_, id, _, _): return id
         case let .approvalRequested(_, id, _): return id
         case let .approvalSettled(_, id, _, _, _): return id
-        case let .turnCompleted(_, id, _, _): return id
+        case let .turnCompleted(_, id, _, _, _, _): return id
         case let .bridgeError(_, id, _, _): return id
         }
     }
@@ -54,7 +67,8 @@ extension BridgeEvent: Codable {
     private enum CodingKeys: String, CodingKey {
         case type, seq, sessionId, session, status, reason, block, blockId, patch
         case approval, approvalId, optionId, outcome
-        case inputTokens, outputTokens, message, fatal
+        case inputTokens, outputTokens, cachedInputTokens, stopReason
+        case message, fatal
     }
 
     public init(from decoder: any Decoder) throws {
@@ -64,6 +78,10 @@ extension BridgeEvent: Codable {
         switch type {
         case "sessionCreated":
             self = .sessionCreated(
+                seq: seq, session: try container.decode(AgentSession.self, forKey: .session)
+            )
+        case "sessionUpdated":
+            self = .sessionUpdated(
                 seq: seq, session: try container.decode(AgentSession.self, forKey: .session)
             )
         case "sessionStatus":
@@ -110,7 +128,13 @@ extension BridgeEvent: Codable {
                 seq: seq,
                 sessionID: try container.decode(String.self, forKey: .sessionId),
                 inputTokens: try container.decodeIfPresent(Int.self, forKey: .inputTokens),
-                outputTokens: try container.decodeIfPresent(Int.self, forKey: .outputTokens)
+                outputTokens: try container.decodeIfPresent(Int.self, forKey: .outputTokens),
+                cachedInputTokens: try container.decodeIfPresent(
+                    Int.self, forKey: .cachedInputTokens
+                ),
+                stopReason: try container.decodeIfPresent(
+                    TurnStopReason.self, forKey: .stopReason
+                )
             )
         case "bridgeError":
             self = .bridgeError(
@@ -133,6 +157,9 @@ extension BridgeEvent: Codable {
         switch self {
         case let .sessionCreated(_, session):
             try container.encode("sessionCreated", forKey: .type)
+            try container.encode(session, forKey: .session)
+        case let .sessionUpdated(_, session):
+            try container.encode("sessionUpdated", forKey: .type)
             try container.encode(session, forKey: .session)
         case let .sessionStatus(_, sessionID, status):
             try container.encode("sessionStatus", forKey: .type)
@@ -161,11 +188,15 @@ extension BridgeEvent: Codable {
             try container.encode(approvalID, forKey: .approvalId)
             try container.encode(optionID, forKey: .optionId)
             try container.encode(outcome, forKey: .outcome)
-        case let .turnCompleted(_, sessionID, inputTokens, outputTokens):
+        case let .turnCompleted(
+            _, sessionID, inputTokens, outputTokens, cachedInputTokens, stopReason
+        ):
             try container.encode("turnCompleted", forKey: .type)
             try container.encode(sessionID, forKey: .sessionId)
             try container.encode(inputTokens, forKey: .inputTokens)
             try container.encode(outputTokens, forKey: .outputTokens)
+            try container.encode(cachedInputTokens, forKey: .cachedInputTokens)
+            try container.encode(stopReason, forKey: .stopReason)
         case let .bridgeError(_, sessionID, message, fatal):
             try container.encode("bridgeError", forKey: .type)
             try container.encode(sessionID, forKey: .sessionId)

@@ -60,8 +60,12 @@ export type BlockStatus = "pending" | "running" | "ok" | "failed" | "rejected";
 
 export interface FileChangeSummary {
   path: string;
-  added: number;
-  removed: number;
+  /**
+   * 增删行数。不是所有运行时都给得出：claude 的 tool_use 只有路径和内容，
+   * 拿不到就必须是 null——填 0 会让客户端显示 "+0 −0"，那是在撒谎。
+   */
+  added: number | null;
+  removed: number | null;
 }
 
 export interface PlanStep {
@@ -99,7 +103,10 @@ export type TranscriptBlock =
       /** MCP server 名或工具来源；无来源时为 null */
       source: string | null;
       tool: string;
+      /** 一行摘要，眼镜屏上通常只显示这个 */
       summary: string;
+      /** 工具返回的正文。眼镜端用不上，但手机端要看，adapter 不应在边界上丢掉 */
+      output: string;
       status: BlockStatus;
     }
   | { kind: "plan"; id: string; steps: PlanStep[] }
@@ -108,14 +115,27 @@ export type TranscriptBlock =
 /**
  * 增量更新。只带变化的字段——流式输出下 blockUpdated 的量远大于 blockAppended，
  * 而眼镜端每次刷新都是整屏替换，能省的带宽都要省。
+ *
+ * `appendText` / `replaceText` 作用在**每种块各自的主文本字段**上，
+ * 不写清楚已经有两个实现读错了：
+ *
+ *   userMessage / agentMessage / reasoning → text
+ *   shellCommand                           → output
+ *   toolCall                               → output（摘要走 summary 字段）
+ *   error                                  → message
+ *   fileChange / plan                      → 无主文本，两个字段都会被忽略
  */
 export interface TranscriptBlockPatch {
-  /** 追加到 text/output 尾部；与 replaceText 互斥 */
+  /** 追加到主文本尾部；与 replaceText 互斥 */
   appendText?: string;
   replaceText?: string;
   streaming?: boolean;
   status?: BlockStatus;
   exitCode?: number;
+  /** 只对 shellCommand 有意义。有的运行时到命令结束才给得出工作目录 */
+  cwd?: string;
+  /** 只对 toolCall 有意义 */
+  summary?: string;
   files?: FileChangeSummary[];
   steps?: PlanStep[];
 }
@@ -124,12 +144,22 @@ export interface TranscriptBlockPatch {
 
 export type ApprovalKind = "shellCommand" | "fileChange" | "tool" | "permission";
 
-export type ApprovalOptionKind = "allow" | "allowAlways" | "deny" | "abort";
+export type ApprovalOptionKind = "allow" | "deny" | "abort";
+
+/**
+ * 裁决的作用范围。三个运行时都区分这三档，而且差别是安全性的而非便利性的：
+ * codex 的 acceptForSession 与 acceptWithExecpolicyAmendment（永久写进 execpolicy）、
+ * ACP 的 allow_once 与 allow_always、claude 的 allow 与 updatedPermissions。
+ * 眼镜上用户是在 600×600 屏上按按钮，"永久放行"和"就这一次"必须一眼可辨，
+ * 不能只靠 label 文案——label 是给人读的，不该拿来做逻辑判断。
+ */
+export type ApprovalScope = "once" | "session" | "persistent";
 
 export interface ApprovalOption {
   id: string;
   label: string;
   kind: ApprovalOptionKind;
+  scope: ApprovalScope;
 }
 
 /**
@@ -149,6 +179,17 @@ export interface ApprovalRequest {
 
 export type ApprovalOutcome = "resolved" | "cancelled" | "timedOut";
 
+/**
+ * turn 的结束原因。被 token 上限截断和正常说完在客户端看来是两回事，
+ * 只给一个 turnCompleted 会把它们抹平。运行时给不出时为 null。
+ */
+export type TurnStopReason =
+  | "completed"
+  | "interrupted"
+  | "maxTokens"
+  | "refused"
+  | "failed";
+
 // MARK: - bridge → 客户端
 
 /**
@@ -157,6 +198,15 @@ export type ApprovalOutcome = "resolved" | "cancelled" | "timedOut";
  */
 export type BridgeEvent =
   | { type: "sessionCreated"; seq: number; session: AgentSession }
+  /**
+   * 会话元数据快照刷新：标题、model、nativeId、capabilities。
+   *
+   * capabilities 尤其需要它：几个 adapter 的真实能力要到 start() 之后才知道
+   * （claude 的 approvals 取决于启动参数，cursor 的 resume 要等 ACP 握手自陈），
+   * 而 sessionCreated 必须在 start() 之前发出去，否则启动期间的事件没有归属。
+   * 客户端收到本事件应当只替换会话元数据，保留已有流水。
+   */
+  | { type: "sessionUpdated"; seq: number; session: AgentSession }
   | {
       type: "sessionStatus";
       seq: number;
@@ -197,6 +247,10 @@ export type BridgeEvent =
       sessionId: string;
       inputTokens: number | null;
       outputTokens: number | null;
+      /** 缓存命中的 input token。实测一轮 24682 个 input 里 23296 是缓存，
+       *  不单列出来客户端算出的成本会差一个数量级 */
+      cachedInputTokens: number | null;
+      stopReason: TurnStopReason | null;
     }
   | {
       type: "bridgeError";

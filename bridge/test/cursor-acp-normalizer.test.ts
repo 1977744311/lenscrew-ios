@@ -61,6 +61,7 @@ test("acp 整轮往返归一成契约事件序列", () => {
     // 用户消息是从我们发出的 session/prompt 造的：cursor 不回显
     "blockAppended:userMessage",
     "status:running",
+    "titleResolved",
     "blockAppended:agentMessage",
     "blockUpdated:appendText ×17",
     // 工具调用插进来，先把正在流的文本块收尾
@@ -104,13 +105,41 @@ test("session/request_permission 映射成 approvalRequested，选项照 ACP 给
       // ACP 的 tool_call 不带工作目录，用会话 cwd
       cwd: WORKSPACE,
       options: [
-        { id: "allow-once", label: "Allow once", kind: "allow" },
-        { id: "allow-always", label: "Allow always", kind: "allowAlways" },
-        { id: "reject-once", label: "Reject", kind: "deny" },
+        { id: "allow-once", label: "Allow once", kind: "allow", scope: "once" },
+        { id: "allow-always", label: "Allow always", kind: "allow", scope: "persistent" },
+        { id: "reject-once", label: "Reject", kind: "deny", scope: "once" },
       ],
       requestedAtMs: FIXED_NOW,
     },
   });
+});
+
+test("四档 ACP 权限选项各自落到正确的 kind + scope", () => {
+  // cursor 实测只给三档，reject_always 没在录像里出现过，但 ACP 规范里有，
+  // 而且它正是「以后都拒」——scope 丢了就等于把永久拒绝降级成一次性拒绝
+  const normalizer = new CursorAcpNormalizer({ cwd: WORKSPACE, now: () => FIXED_NOW });
+  const events = normalizer.normalize({
+    jsonrpc: "2.0",
+    id: 7,
+    method: "session/request_permission",
+    params: {
+      sessionId: "s",
+      toolCall: { toolCallId: "t1", title: "rm -rf build", kind: "execute" },
+      options: [
+        { optionId: "a1", name: "Allow once", kind: "allow_once" },
+        { optionId: "a2", name: "Allow always", kind: "allow_always" },
+        { optionId: "r1", name: "Reject", kind: "reject_once" },
+        { optionId: "r2", name: "Reject always", kind: "reject_always" },
+      ],
+    },
+  });
+  const approval = events.find((event) => event.type === "approvalRequested");
+  assert.deepEqual(approval?.type === "approvalRequested" ? approval.approval.options : [], [
+    { id: "a1", label: "Allow once", kind: "allow", scope: "once" },
+    { id: "a2", label: "Allow always", kind: "allow", scope: "persistent" },
+    { id: "r1", label: "Reject", kind: "deny", scope: "once" },
+    { id: "r2", label: "Reject always", kind: "deny", scope: "persistent" },
+  ]);
 });
 
 test("我们对审批请求的答复本身翻译成 approvalSettled", () => {
@@ -181,6 +210,62 @@ test("prompt 响应只有 stopReason，token 用量只能是 null", () => {
     type: "turnCompleted",
     inputTokens: null,
     outputTokens: null,
+    cachedInputTokens: null,
+    stopReason: "completed",
   });
   assert.deepEqual(events.at(-1), { type: "status", status: "idle" });
+});
+
+test("session_info_update 产出 titleResolved，标题不再丢失", () => {
+  const resolved = runFixture().filter((event) => event.type === "titleResolved");
+  assert.deepEqual(resolved, [{ type: "titleResolved", title: "Shell Command Echo" }]);
+});
+
+test("清空标题的 session_info_update 不发事件", () => {
+  const normalizer = new CursorAcpNormalizer();
+  const events = normalizer.normalize({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: { sessionId: "s", update: { sessionUpdate: "session_info_update", title: null } },
+  });
+  assert.deepEqual(events, []);
+});
+
+/** 走一遍 prompt 请求→响应，取出那条 turnCompleted */
+const turnOf = (response: Record<string, unknown>): AdapterEvent | undefined => {
+  const normalizer = new CursorAcpNormalizer();
+  normalizer.normalize({
+    jsonrpc: "2.0",
+    id: "lc-1",
+    method: "session/prompt",
+    params: { sessionId: "s", prompt: [{ type: "text", text: "hi" }] },
+  });
+  return normalizer
+    .normalize({ jsonrpc: "2.0", id: "lc-1", ...response })
+    .find((event) => event.type === "turnCompleted");
+};
+
+test("ACP 的 stopReason 逐档映射到契约的 TurnStopReason", () => {
+  const stopReasonOf = (acp: string | undefined): unknown => {
+    const event = turnOf({ result: acp === undefined ? {} : { stopReason: acp } });
+    return event?.type === "turnCompleted" ? event.stopReason : "没有 turnCompleted";
+  };
+  assert.equal(stopReasonOf("end_turn"), "completed");
+  assert.equal(stopReasonOf("cancelled"), "interrupted");
+  assert.equal(stopReasonOf("max_tokens"), "maxTokens");
+  assert.equal(stopReasonOf("refusal"), "refused");
+  assert.equal(stopReasonOf("max_turn_requests"), "failed");
+  // 运行时没给就是没给，不许瞎猜成 completed
+  assert.equal(stopReasonOf(undefined), null);
+});
+
+test("prompt 直接报错时也要收一条 stopReason failed 的 turnCompleted", () => {
+  const event = turnOf({ error: { code: -32603, message: "Internal error" } });
+  assert.deepEqual(event, {
+    type: "turnCompleted",
+    inputTokens: null,
+    outputTokens: null,
+    cachedInputTokens: null,
+    stopReason: "failed",
+  });
 });
