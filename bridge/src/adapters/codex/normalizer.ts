@@ -45,7 +45,7 @@ import type {
   CodexTurnCompletedParams,
   CodexTurnPlanUpdatedParams,
   CodexTurnStartedParams,
-  CodexTurnStatus,
+  CodexTurn,
 } from "./protocol.ts";
 
 /** adapter 要回送给 app-server 的应答体 */
@@ -181,18 +181,23 @@ function dynamicToolOutput(
 
 /**
  * codex 的 TurnStatus 只有四档，能可靠对上契约的三种。
- * maxTokens 和 refused 在 codex 这边没有对应取值——上下文超限是以
- * status=failed + codexErrorInfo=contextWindowExceeded 的形式出现的，
- * 那是错误而不是截断语义，不硬塞。
+ * codex 把上下文超限表达成 status=failed + codexErrorInfo=contextWindowExceeded，
+ * 这里挑出来归到 maxTokens：对用户来说"上下文满了"和"出错了"是两种处置
+ * （前者去压缩或开新会话），归成 failed 等于把这个信息藏起来。
+ * 配额类的 usageLimitExceeded / sessionBudgetExceeded 不算，它们不是模型的 token 上限。
+ *
+ * refused 在 codex 这边没有对应取值，不硬塞。
  */
-function stopReasonFor(status: CodexTurnStatus | undefined): TurnStopReason | null {
-  switch (status) {
+function stopReasonFor(turn: CodexTurn | undefined): TurnStopReason | null {
+  switch (turn?.status) {
     case "completed":
       return "completed";
     case "interrupted":
       return "interrupted";
     case "failed":
-      return "failed";
+      return turn.error?.codexErrorInfo === "contextWindowExceeded"
+        ? "maxTokens"
+        : "failed";
     default:
       return null;
   }
@@ -398,7 +403,7 @@ export class CodexNormalizer
         inputTokens: this.#lastInputTokens,
         outputTokens: this.#lastOutputTokens,
         cachedInputTokens: this.#lastCachedInputTokens,
-        stopReason: stopReasonFor(params.turn?.status),
+        stopReason: stopReasonFor(params.turn),
       },
     ];
     // 下一轮没推 tokenUsage 就该报 null，不能把这轮的数字漏过去

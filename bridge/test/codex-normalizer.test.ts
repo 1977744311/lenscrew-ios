@@ -527,6 +527,34 @@ test("算不出增删行数时报 null 而不是 0", () => {
   ]);
 });
 
+/**
+ * codex 把上下文超限表达成 failed + codexErrorInfo，归成 failed 就把它藏起来了：
+ * "上下文满了"该去压缩或开新会话，"出错了"该去看错误，是两种处置。
+ */
+test("上下文超限归到 maxTokens，其余 failed 保持 failed", () => {
+  const normalizer = new CodexNormalizer({ now: () => 0 });
+  const stopReasonOf = (error: unknown) => {
+    const events = normalizer.normalize({
+      method: "turn/completed",
+      params: { threadId: "t", turn: { id: "u", status: "failed", error } },
+    });
+    const completed = events[0];
+    assert.ok(completed && completed.type === "turnCompleted");
+    return completed.stopReason;
+  };
+
+  assert.equal(
+    stopReasonOf({ message: "context window exceeded", codexErrorInfo: "contextWindowExceeded" }),
+    "maxTokens",
+  );
+  // 配额用尽不是模型的 token 上限，不能混进来
+  assert.equal(
+    stopReasonOf({ message: "usage limit", codexErrorInfo: "usageLimitExceeded" }),
+    "failed",
+  );
+  assert.equal(stopReasonOf(null), "failed");
+});
+
 test("turn 被中断时 stopReason 是 interrupted", () => {
   const normalizer = new CodexNormalizer({ now: () => 0 });
   const events = normalizer.normalize({

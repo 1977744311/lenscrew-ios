@@ -218,9 +218,21 @@ export type CodexTurnStatus =
   | "failed"
   | "inProgress";
 
+/**
+ * CodexErrorInfo 的完整取值见 generate-ts；这里只需要能和字符串档比较，
+ * 对象档（httpConnectionFailed 等）一律按未知处理。
+ */
+export type CodexErrorInfo = string | Record<string, unknown>;
+
+export interface CodexTurnError {
+  message?: string;
+  codexErrorInfo?: CodexErrorInfo | null;
+}
+
 export interface CodexTurn {
   id: string;
   status: CodexTurnStatus;
+  error?: CodexTurnError | null;
 }
 
 export interface CodexThreadStartedParams {
