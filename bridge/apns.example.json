@@ -1,0 +1,6 @@
+{
+  "teamId": "TEAMID1234",
+  "keyId": "KEYID12345",
+  "bundleId": "dev.steven.LensCrew",
+  "privateKeyPath": "AuthKey_XXXXXXXXXX.p8"
+}

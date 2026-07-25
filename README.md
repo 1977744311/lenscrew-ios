@@ -1,8 +1,8 @@
 # LensCrew
 
-把本机的 Codex、Claude Code、Cursor Agent 三个编码 agent 收进一个指挥台：手机负责下指令和打字，Meta Ray-Ban Display 眼镜负责抬眼看流水、抬手批工具调用。
+把本机的 Codex、Claude Code、Cursor Agent 三个编码 agent 收进一个指挥台：手机是完整的指挥台，Apple Watch 与 Meta Ray-Ban Display 眼镜是可选延伸——抬眼看流水、抬手批工具调用。
 
-agent 运行时、仓库和工作区操作全部留在 Mac，手机和眼镜只是远端控制面。
+本地优先：agent 运行时、仓库和工作区操作全部留在 Mac，手机 / 手表 / 眼镜只是远端控制面。
 
 ```
 ┌──────────────┐   SSE 下行 / POST 上行   ┌──────────────────┐   stdio   ┌──────────────────┐
@@ -11,6 +11,92 @@ agent 运行时、仓库和工作区操作全部留在 Mac，手机和眼镜只�
 │  └ 眼镜 (DAT) │                          │  └ 会话事件总线    │           │ cursor-agent acp │
 └──────────────┘                          └──────────────────┘           └──────────────────┘
 ```
+
+## 能力
+
+- **统一契约**：codex app-server / claude stream-json / cursor-agent ACP 三条链路归一为同一套会话与审批事件，TS 与 Swift 双语 fixture 锁死线上格式（`protocol/fixtures/`，两侧测试消费同一份 JSON）
+- **手机端六屏 UI**：指挥台 / 会话流水 / 审批 / 新会话 / 眼镜 / 设置，不依赖眼镜即完整可用
+- **眼镜端四屏**：会话列表 / 流水 / 块详情 / 审批卡，600×600，在 DAT 0.8.0 硬约束下做整屏替换 + tap-only + 分页
+- **远程接入（脱离 VPN）**：二维码配对 + 端到端加密 + 自架 relay 中继；局域网直连与中继同协议，直连优先、失败回退中继
+- **APNs 推送**：bridge 直连 Apple（token-based .p8，JWT over HTTP/2）；审批到达与轮次完成即使 App 在后台 SSE 已断也能唤起；审批推送带「允许一次 / 拒绝」可操作按钮，锁屏直接裁决
+- **多 Mac**：手机存多台主机（每台一条 Keychain 口令与公钥记录），设置页切换，会话列表标注归属；支持同时保持多条连接、跨主机聚合会话与合并审批队列
+- **开源自建分发**：不发 iOS 安装包，源码自建（见[分发模式](#分发模式为什么不发安装包)）
+
+**未补全**：
+
+- Apple Watch App target（交互 mockup 已定稿，开发中；能力规划见 [Apple Watch](#apple-watch)）
+- git 操作面板
+- 语音输入（手机端）
+- 眼镜真机验证（依赖 Meta Wearables Developer Center 注册与固件 / Meta AI App 版本，见 [眼镜自建](docs/glasses-self-build.md)）
+
+## 快速开始
+
+前置：Mac 上装有 Node ≥ 22.18（bridge 零运行时依赖，直接跑 TS，无需 `npm install`），以及至少一个 agent CLI（`codex` / `claude` / `cursor-agent`）。
+
+**1. 起 bridge：**
+
+```bash
+cd bridge && node bin/lenscrew.ts up --host 0.0.0.0
+```
+
+默认只监听回环，手机连不上——要连手机得显式给 `--host`（局域网地址或 `0.0.0.0`）或 `--relay`，免得在公共 Wi-Fi 上不知不觉把本机 agent 暴露出去。启动时打印 macDeviceId、身份指纹、访问口令与**终端二维码**；配对窗口开 5 分钟，过期后用 `lenscrew qr` 重开。
+
+**2. 自建 iOS App**（本项目不发安装包）：
+
+```bash
+brew install xcodegen
+xcodegen generate
+open LensCrew.xcodeproj
+```
+
+Xcode 里选自己的 Team、改 Bundle ID，签名装到 iPhone（iOS 17+）。不配眼镜凭据也能编译运行：模拟器走 Mock 眼镜，手机端六屏全部可用。
+
+**3. 手机配对**：App 内「添加电脑」扫 bridge 打印的二维码，完成端到端加密配对，即可建会话、发消息、批审批。
+
+CLI 全部表面：
+
+```
+lenscrew up    [--host 地址] [--port 4311] [--token 口令] [--relay https://…] [--name 设备名] [--state-dir 目录]
+lenscrew qr    [--state-dir 目录]     # 向本机运行中的 bridge 重开 5 分钟配对窗口并重打印二维码
+lenscrew relay [--host 0.0.0.0] [--port 4370]   # 自架中继服务器
+```
+
+状态目录 `~/.lenscrew`（可用 `LENSCREW_STATE_DIR` 覆盖，权限 0700）：`identity.json`（Ed25519 身份，0600）、`trusted-phones.json`（可信手机公钥）、`apns.json`（用户手工放置，见推送一节）、`push-tokens.json` 与 `admin.json`（运行时生成）。
+
+## 远程接入（脱离 VPN）
+
+手机不必和 Mac 同一局域网：
+
+- **配对**：扫码即建立信任——二维码内含 Mac 的身份公钥作信任根，配对窗口 5 分钟时效
+- **端到端加密**：X25519 密钥协商 + Ed25519 身份签名 + HKDF-SHA256 派生 + 方向隔离的 AES-256-GCM，counter 即 nonce、单调递增防重放
+- **自架 relay**：`lenscrew relay` 部署到 VPS，按 macDeviceId 分房间、只转发密文、不缓冲，日志仅打房间号哈希前 8 位——relay 被攻破也只见密文
+- **路径选择**：局域网直连与 relay 中继同协议，直连优先、失败回退中继
+
+协议细节与威胁模型见 [docs/remote-access-security.md](docs/remote-access-security.md)，relay 部署见 [docs/self-hosting-relay.md](docs/self-hosting-relay.md)。
+
+## 推送（APNs）
+
+SSE 在 iOS 后台不存活，审批与完成通知靠推送唤起。bridge 直连 Apple（token-based `.p8` 认证），把 Apple Developer 后台建的 Auth Key 信息写进 `~/.lenscrew/apns.json` 即启用；缺文件则推送整体禁用、bridge 照常跑。审批推送带「允许一次 / 拒绝」按钮，锁屏直接裁决。配置步骤见 [docs/push-apns-setup.md](docs/push-apns-setup.md)。
+
+## 多 Mac
+
+手机可保存多台 Mac：每台一条独立的 Keychain 记录（口令 + 身份公钥），设置页一键切换，会话列表标注每条会话归属哪台主机。进阶用法：同时保持多条连接，跨主机聚合会话列表与合并审批队列——多台机器上的 agent 在一个屏幕里批。
+
+## Apple Watch
+
+腕上审批、会话一瞥、听写追加指令、Smart Stack 常驻。交互 mockup 已定稿，App target 开发中。
+
+## 眼镜自建
+
+Meta Ray-Ban Display 眼镜功能是可选延伸，使用者自行注册 Meta 开发者并自打包：
+
+1. Meta AI App 打开开发者模式（设置 → 应用信息 → 版本号连点 5 次）
+2. 确认眼镜固件与 Meta AI App 版本满足 DAT SDK 要求
+3. 到 [Meta Wearables Developer Center](https://wearables.developer.meta.com/) 注册、建 Project，拿 iOS 集成的 MetaAppID 与 ClientToken
+4. 复制 `App/Support/Secrets.example.xcconfig` 为 `Secrets.xcconfig`（已 gitignore），填入两个值
+5. Xcode 选个人 Team、改 Bundle ID，真机签名运行
+
+**没有 MWDAT 配置也能编译运行**：模拟器走 Mock，真机上眼镜功能休眠，手机端不受影响。DAT SDK 是公开 SPM 依赖（`facebook/meta-wearables-dat-ios`），无需私有源。完整步骤见 [docs/glasses-self-build.md](docs/glasses-self-build.md)。
 
 ## 运行时接口矩阵
 
@@ -50,6 +136,11 @@ protocol/fixtures/     TS 与 Swift 共用的黄金样本，两侧测试都消�
 bridge/                Mac bridge（Node，零运行时依赖）
   src/protocol/        统一契约（线上格式的判定权在这里）
   src/adapters/        三个运行时的 adapter，差异只允许存在于此
+  src/secure/          E2EE：握手状态机与密码学纯函数
+  src/relay/           自架中继的服务端与 bridge 侧客户端
+  src/push/            APNs：配置、HTTP/2 客户端、推送决策
+  src/qr/              终端二维码渲染
+  src/state/           ~/.lenscrew 状态目录：身份密钥、手机信任表
 Sources/               LensCrewKit（Swift 6，库层零第三方依赖）
   AgentProtocol/       bridge 契约的 Swift 同构镜像
   BridgeLink/          与 bridge 的连接、SSE 解码
@@ -59,7 +150,7 @@ Sources/               LensCrewKit（Swift 6，库层零第三方依赖）
 App/                   iOS App target（真实 SDK 绑定收敛在 Adapters/）
 ```
 
-## 开发
+## 开发与测试
 
 ```bash
 swift test                                    # 库层，不需要眼镜也不需要 SDK
@@ -67,24 +158,31 @@ cd bridge && node --test 'test/**/*.test.ts'  # bridge，Node 22.18+ 原生跑 T
 cd bridge && npx tsc --noEmit                 # 类型检查（运行时靠类型擦除，不做构建）
 ```
 
-跑起 bridge：
+契约同步靠 `protocol/fixtures/`：同一份 JSON 被两种语言的测试同时消费，任一侧改了线上格式而没同步另一侧，两边都会红。端到端链路由 `Tests/LensCrewCoreTests/EndToEndTests.swift` 覆盖——真起 bridge 进程，一路验到眼镜屏上出现审批卡。
 
-```bash
-cd bridge && node bin/lenscrew.ts up --host 0.0.0.0
-```
+贡献流程与规范见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
-默认只监听回环，手机连不上——要连手机得显式给 `--host`，免得在公共 Wi-Fi 上不知不觉把本机 agent 暴露出去。
+## 安全与隐私
 
-契约同步靠 `protocol/fixtures/`：同一份 JSON 被两种语言的测试同时消费，任一侧改了线上格式而没同步另一侧，两边都会红。
+- **口令只防误连**，不是安全边界；端到端加密才是安全边界
+- **E2EE**：身份签名 + 全字段绑定的握手 transcript 防降级与中间人；方向隔离密钥 + 单调 counter 防重放
+- **relay 零知识**：只见密文与房间号，日志只记房间号哈希前 8 位，不缓冲任何帧
+- **密钥只落两处**：iOS Keychain（`WhenUnlockedThisDeviceOnly`）与 Mac `~/.lenscrew`（目录 0700、文件 0600），绝不入库
+- **本地优先**：代码、仓库、agent 进程全在 Mac，云端至多经过一台只见密文的自架 relay
 
-## 现状
+完整威胁模型见 [docs/remote-access-security.md](docs/remote-access-security.md)。
 
-M0 已跑通端到端：`lenscrew up` 起 bridge，手机连上去建真实 Cursor 会话、发消息、收到回复，全程走 HTTP + SSE。眼镜链路由 `Tests/LensCrewCoreTests/EndToEndTests.swift` 覆盖——真起 bridge 进程，一路验到眼镜屏上出现审批卡。
+## 分发模式（为什么不发安装包）
 
-已完成：统一契约（TS + Swift 两侧都消费同一份 fixture）、三个运行时的 adapter（各自带实测录制的 fixture）、bridge 的会话总线与 SSE 传输、CLI、眼镜端渲染与导航（分页、审批卡、稳定性保证）、客户端会话状态机（断连补齐与断档检测）、iOS App（连接配置、会话列表、流水、审批、发消息，带真实 MWDAT 编译通过）。
+LensCrew 不分发 iOS 安装包（IPA / TestFlight），只做源码自建：
 
-未完成：端到端加密与二维码配对（现在只是局域网直连 + 防误连口令）、git 操作面板、语音输入、眼镜真机验证。真机验证依赖 Meta Wearables Developer Center 注册、Meta AI app v272+、眼镜固件 V127+。
+- 遵守 Apple Developer Program 条款——个人开发者签名的构建不适合对外再分发
+- Meta Wearables DAT 处于 developer preview，未发布应用只能自建或走邀请制 release channel
 
-## 参考
+这与 turbometa、remodex 等项目的源码分发模式一致：clone 仓库、填自己的凭据、Xcode 个人签名装机。眼镜凭据（MWDAT）与推送密钥（APNs）都由使用者自持，模板见 `App/Support/Secrets.example.xcconfig` 与 `bridge/apns.example.json`。
 
-架构上参考了 [Remodex](https://github.com/Emanuele-web04/remodex)（Apache-2.0）的本地优先 bridge 思路。LensCrew 是独立实现，不使用其名称与品牌。
+## 许可证与致谢
+
+[MIT](LICENSE)。
+
+架构上参考了 [Remodex](https://github.com/Emanuele-web04/remodex)（Apache-2.0）的本地优先 bridge 思路；分发模式参考了 turbometa 的源码自建实践。LensCrew 是独立实现，不使用两者的名称与品牌。
