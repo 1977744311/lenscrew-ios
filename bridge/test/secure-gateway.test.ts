@@ -337,7 +337,8 @@ test("push-register 落盘 push-tokens.json,含 updatedAtMs", async () => {
         t: "push-register",
         deviceToken: "tok-123",
         environment: "sandbox",
-        alertsEnabled: false,
+        // 手机发的是 { approvals, turns } 对象;这里关掉审批推送、保留轮次
+        alertsEnabled: { approvals: false, turns: true },
       }),
     ),
     phone.sink,
@@ -354,7 +355,7 @@ test("push-register 落盘 push-tokens.json,含 updatedAtMs", async () => {
     "phone-A": {
       deviceToken: "tok-123",
       environment: "sandbox",
-      alertsEnabled: false,
+      alertsEnabled: { approvals: false, turns: true },
       updatedAtMs: NOW,
     },
   });

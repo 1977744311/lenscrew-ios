@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { createHash, randomBytes } from "node:crypto";
-import { chmodSync, writeFileSync } from "node:fs";
+import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { request as httpRequest } from "node:http";
 import { hostname, networkInterfaces } from "node:os";
 import { join } from "node:path";
 
@@ -9,7 +10,16 @@ import { SessionHub } from "../src/session/hub.ts";
 import { createBridgeServer } from "../src/transport/server.ts";
 import { createRelayServer } from "../src/relay/relayServer.ts";
 import { startRelayClient } from "../src/relay/relayClient.ts";
-import { SecureGateway } from "../src/secure/secureGateway.ts";
+import { SecureGateway, loadPushTokens, type PushTokens } from "../src/secure/secureGateway.ts";
+import { loadApnsConfig } from "../src/push/apnsConfig.ts";
+import {
+  createApnsClient,
+  type ApnsClient,
+  type ApnsEnvironment,
+} from "../src/push/apnsClient.ts";
+import { createPushDispatcher, type PushTokenRegistry } from "../src/push/pushDispatcher.ts";
+import { renderPairingQr } from "../src/qr/index.ts";
+import type { BridgeEvent } from "../src/protocol/events.ts";
 import {
   loadOrCreateIdentity,
   resolveStateDir,
@@ -77,6 +87,7 @@ function printHelp(): void {
   process.stdout.write(
     [
       "用法: lenscrew up [选项]        启动 bridge",
+      "      lenscrew qr [选项]        重开配对窗口并打印二维码",
       "      lenscrew relay [选项]     启动自架中继服务器",
       "",
       "up 选项:",
@@ -86,6 +97,9 @@ function printHelp(): void {
       "  --relay <url>      启用远程中继,如 https://relay.example",
       "  --name <名字>      配对时展示的设备名,默认本机 hostname",
       "  --state-dir <目录> 状态目录(身份/信任表),等价环境变量 " + STATE_DIR_ENV,
+      "",
+      "qr 选项:",
+      "  --state-dir <目录> 状态目录,需与运行中的 bridge 一致",
       "",
       "relay 选项:",
       "  --host <地址>      监听地址,默认 0.0.0.0",
@@ -151,6 +165,79 @@ function writeSecretFile(path: string, value: unknown): void {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
   // mode 只在新建时生效,覆盖旧文件后要重新收紧
   chmodSync(path, 0o600);
+}
+
+/** 配对 payload → 终端可扫二维码;payload 太长(超 QR 容量)时退回只打 JSON */
+function printPairingQr(payload: Record<string, unknown>): void {
+  try {
+    process.stdout.write(`\n${renderPairingQr(JSON.stringify(payload))}\n`);
+  } catch {
+    process.stdout.write("  (配对内容过长,无法生成二维码;用上面的 payload 手动配对)\n");
+  }
+}
+
+/**
+ * push-tokens.json 的 environment 是手机侧口径(development/production),
+ * APNs 客户端要的是主机口径(sandbox/production),在此翻译。
+ */
+function toPushRegistry(tokens: PushTokens): PushTokenRegistry {
+  const registry: PushTokenRegistry = {};
+  for (const [phoneDeviceId, record] of Object.entries(tokens)) {
+    registry[phoneDeviceId] = {
+      deviceToken: record.deviceToken,
+      environment: record.environment === "development" ? "sandbox" : "production",
+      alertsEnabled: record.alertsEnabled,
+    };
+  }
+  return registry;
+}
+
+function sessionTitleFor(hub: SessionHub, event: BridgeEvent): string | undefined {
+  const sessionId = (event as { sessionId?: string }).sessionId;
+  if (sessionId === undefined) return undefined;
+  return hub.listSessions().find((session) => session.id === sessionId)?.title;
+}
+
+/**
+ * 把 hub 事件流接到 APNs。缺 apns.json 就整体禁用并只提示一次——
+ * SSE 在 iOS 后台不存活,审批与完成通知要靠推送唤起。返回清理回调。
+ */
+function startPushBridge(hub: SessionHub, stateDir: string, macDeviceId: string): () => void {
+  const config = loadApnsConfig(stateDir);
+  if (config === null) {
+    process.stdout.write("  APNs 未配置(缺 apns.json),审批/完成推送已禁用\n");
+    return () => {};
+  }
+  const dispatcher = createPushDispatcher();
+  const clients = new Map<ApnsEnvironment, ApnsClient>();
+  const clientFor = (environment: ApnsEnvironment): ApnsClient => {
+    const existing = clients.get(environment);
+    if (existing !== undefined) return existing;
+    const client = createApnsClient({ ...config, environment });
+    clients.set(environment, client);
+    return client;
+  };
+  const unsubscribe = hub.onEvent((event) => {
+    const registry = toPushRegistry(loadPushTokens(stateDir));
+    const title = sessionTitleFor(hub, event);
+    // exactOptionalPropertyTypes:标题缺席时不能显式塞 undefined,得整个省略键
+    const context = { macDeviceId, ...(title !== undefined && { sessionTitle: title }) };
+    for (const push of dispatcher.dispatch(event, registry, context)) {
+      void clientFor(push.environment)
+        .send({ deviceToken: push.deviceToken, payload: push.payload })
+        .then((result) => {
+          if (result.tokenGone) dispatcher.markTokenGone(push.deviceToken);
+        })
+        .catch((error: unknown) => {
+          process.stderr.write(`  推送失败: ${error instanceof Error ? error.message : String(error)}\n`);
+        });
+    }
+  });
+  process.stdout.write("  APNs 已就绪,审批与轮次完成将推送到已注册手机\n");
+  return () => {
+    unsubscribe();
+    for (const client of clients.values()) client.close();
+  };
 }
 
 async function runUp(options: UpOptions): Promise<void> {
@@ -234,6 +321,10 @@ async function runUp(options: UpOptions): Promise<void> {
     process.stdout.write("  仅监听回环,手机连不上;要连手机请加 --host 或 --relay\n");
   }
 
+  const stopPushBridge = startPushBridge(hub, stateDir, identity.macDeviceId);
+  // 用手机 App「添加电脑」扫这个码即完成 E2EE 配对
+  printPairingQr(pairPayload());
+
   const relayClient =
     options.relay !== null
       ? startRelayClient({
@@ -248,6 +339,7 @@ async function runUp(options: UpOptions): Promise<void> {
   const shutdown = () => {
     if (shuttingDown) return;
     shuttingDown = true;
+    stopPushBridge();
     relayClient?.close();
     gateway.close();
     server.close();
@@ -306,10 +398,83 @@ async function runRelay(options: RelayOptions): Promise<void> {
   process.on("SIGTERM", shutdown);
 }
 
+interface AdminHandle {
+  port: number;
+  adminToken: string;
+  pid: number;
+}
+
+/** 向本机运行中的 bridge 请求重开配对窗口,拿到新 payload */
+function requestReopenPairing(handle: AdminHandle): Promise<{ expiresAtMs: number; pairPayload: Record<string, unknown> }> {
+  return new Promise((resolve, reject) => {
+    const request = httpRequest(
+      {
+        host: "127.0.0.1",
+        port: handle.port,
+        path: "/admin/pairing",
+        method: "POST",
+        headers: { authorization: `Bearer ${handle.adminToken}` },
+      },
+      (response) => {
+        let body = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk) => (body += chunk));
+        response.on("end", () => {
+          if (response.statusCode !== 200) {
+            reject(new Error(`admin 接口返回 ${response.statusCode}: ${body}`));
+            return;
+          }
+          try {
+            const parsed = JSON.parse(body) as {
+              expiresAtMs: number;
+              pairPayload: Record<string, unknown>;
+            };
+            resolve({ expiresAtMs: parsed.expiresAtMs, pairPayload: parsed.pairPayload });
+          } catch (error) {
+            reject(error instanceof Error ? error : new Error(String(error)));
+          }
+        });
+      },
+    );
+    request.on("error", reject);
+    request.end();
+  });
+}
+
+async function runQr(argv: string[]): Promise<void> {
+  let stateDirArg: string | null = null;
+  for (let index = 0; index < argv.length; index += 1) {
+    if ((argv[index] === "--state-dir") && argv[index + 1]) {
+      stateDirArg = argv[index + 1] ?? null;
+      index += 1;
+    } else if (argv[index] === "--help" || argv[index] === "-h") {
+      printHelp();
+      process.exit(0);
+    }
+  }
+  const stateDir = resolveStateDir(
+    stateDirArg !== null ? { [STATE_DIR_ENV]: stateDirArg } : process.env,
+  );
+  let handle: AdminHandle;
+  try {
+    handle = JSON.parse(readFileSync(join(stateDir, "admin.json"), "utf8")) as AdminHandle;
+  } catch {
+    throw new Error("找不到运行中的 bridge(缺 admin.json);请先在本机 lenscrew up");
+  }
+  const { expiresAtMs, pairPayload } = await requestReopenPairing(handle);
+  process.stdout.write(`  配对窗口至 ${new Date(expiresAtMs).toISOString()}\n`);
+  process.stdout.write(`  配对 payload ${JSON.stringify(pairPayload)}\n`);
+  printPairingQr(pairPayload);
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   if (argv[0] === "relay") {
     await runRelay(parseRelayArguments(argv.slice(1)));
+    return;
+  }
+  if (argv[0] === "qr") {
+    await runQr(argv.slice(1));
     return;
   }
   const command = argv[0] === "up" ? argv.slice(1) : argv;

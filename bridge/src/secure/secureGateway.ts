@@ -46,10 +46,16 @@ export interface SecureGatewayOptions {
 
 const PUSH_TOKENS_FILE = "push-tokens.json";
 
+/** 两类通知各自的开关;手机端 UI 分别控制审批与轮次完成 */
+export interface PushAlertsEnabled {
+  approvals: boolean;
+  turns: boolean;
+}
+
 export interface PushTokenRecord {
   deviceToken: string;
   environment: string;
-  alertsEnabled: boolean;
+  alertsEnabled: PushAlertsEnabled;
   updatedAtMs: number;
 }
 
@@ -186,12 +192,19 @@ export class SecureGateway {
     const deviceToken = message["deviceToken"];
     if (typeof deviceToken !== "string" || deviceToken.length === 0) return;
     const environment = message["environment"];
-    const alertsEnabled = message["alertsEnabled"];
+    // 手机发的是 { approvals, turns } 对象;字段缺席按开启兜底,只有显式 false 才关
+    const alerts =
+      typeof message["alertsEnabled"] === "object" && message["alertsEnabled"] !== null
+        ? (message["alertsEnabled"] as Record<string, unknown>)
+        : {};
     const tokens = loadPushTokens(this.#stateDir);
     tokens[phoneDeviceId] = {
       deviceToken,
       environment: typeof environment === "string" && environment.length > 0 ? environment : "production",
-      alertsEnabled: typeof alertsEnabled === "boolean" ? alertsEnabled : true,
+      alertsEnabled: {
+        approvals: alerts["approvals"] !== false,
+        turns: alerts["turns"] !== false,
+      },
       updatedAtMs: this.#now(),
     };
     const path = join(this.#stateDir, PUSH_TOKENS_FILE);
