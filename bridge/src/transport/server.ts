@@ -3,6 +3,8 @@ import { timingSafeEqual } from "node:crypto";
 
 import type { BridgeEvent, ClientCommand } from "../protocol/events.ts";
 import type { SessionHub } from "../session/hub.ts";
+import type { HostFrame } from "../secure/channel.ts";
+import type { SecureGateway } from "../secure/secureGateway.ts";
 
 /**
  * 下行选 SSE 而不是 WebSocket：bridge 要保持零第三方依赖，
@@ -17,6 +19,13 @@ export interface BridgeServerOptions {
   token: string;
   host: string;
   port: number;
+  /** 传入即启用 /e2ee/stream + /e2ee/send 本地直连 E2EE 端点 */
+  gateway?: SecureGateway;
+  /** 传入即启用 /admin/pairing(仅回环来源 + 独立 Bearer token) */
+  admin?: {
+    token: string;
+    reopenPairing: () => { expiresAtMs: number; pairPayload: unknown };
+  };
 }
 
 const SSE_HEADERS = {
@@ -30,9 +39,21 @@ const SSE_HEADERS = {
 /** 心跳：手机端切后台再回来时，靠这个尽快发现连接已死 */
 const HEARTBEAT_MS = 15_000;
 
+/** 单 device 的 E2EE 下行:流断开期间的出站帧先排队,重连后一次性补上 */
+interface E2eeChannel {
+  stream: ServerResponse | null;
+  queue: string[];
+}
+
+/** 队列防的是「POST 先到、stream 后开」的窗口期,不是离线缓存,不用太深 */
+const E2EE_QUEUE_LIMIT = 256;
+
 export function createBridgeServer(options: BridgeServerOptions): Server {
-  const { hub, token } = options;
+  const { hub, token, gateway, admin } = options;
   const subscribers = new Set<ServerResponse>();
+  const e2eeChannels = new Map<string, E2eeChannel>();
+  /** encryptedEnvelope 只带 roomId,靠 clientHello 学到的映射把回帧路由回来源 device */
+  const e2eeRoomToDevice = new Map<string, string>();
 
   hub.onEvent((event) => {
     const frame = formatFrame(event);
@@ -41,6 +62,7 @@ export function createBridgeServer(options: BridgeServerOptions): Server {
 
   const heartbeat = setInterval(() => {
     for (const response of subscribers) response.write(": ping\n\n");
+    for (const channel of e2eeChannels.values()) channel.stream?.write(": ping\n\n");
   }, HEARTBEAT_MS);
   heartbeat.unref();
 
@@ -56,6 +78,8 @@ export function createBridgeServer(options: BridgeServerOptions): Server {
     clearInterval(heartbeat);
     for (const response of subscribers) response.end();
     subscribers.clear();
+    for (const channel of e2eeChannels.values()) channel.stream?.end();
+    e2eeChannels.clear();
   });
 
   return server;
@@ -68,6 +92,45 @@ export function createBridgeServer(options: BridgeServerOptions): Server {
 
     if (request.method === "GET" && url.pathname === "/health") {
       sendJSON(response, 200, { ok: true });
+      return;
+    }
+
+    if (admin !== undefined && request.method === "POST" && url.pathname === "/admin/pairing") {
+      // admin 面只给本机 CLI 用:回环来源 + 与访问口令独立的 adminToken
+      if (!isLoopback(request)) {
+        sendJSON(response, 403, { error: "loopback only" });
+        return;
+      }
+      if (!authorized(request, admin.token)) {
+        sendJSON(response, 401, { error: "unauthorized" });
+        return;
+      }
+      const reopened = admin.reopenPairing();
+      sendJSON(response, 200, { ok: true, ...reopened });
+      return;
+    }
+
+    // /e2ee/* 不查访问口令:配对前 phone 拿不到 token,安全性由 E2EE 握手本身保证
+    if (gateway !== undefined && request.method === "GET" && url.pathname === "/e2ee/stream") {
+      const device = url.searchParams.get("device");
+      if (device === null || device === "") {
+        sendJSON(response, 400, { error: "device query is required" });
+        return;
+      }
+      openE2eeStream(device, response);
+      return;
+    }
+
+    if (gateway !== undefined && request.method === "POST" && url.pathname === "/e2ee/send") {
+      const frame = await readJSON(request);
+      const device = resolveE2eeDevice(frame);
+      if (device === undefined) {
+        sendJSON(response, 400, { error: "cannot route frame to a device" });
+        return;
+      }
+      gateway.handleFrame(frame, e2eeSink(device));
+      // 应答帧一律走 stream 下行,这里只确认收到
+      sendJSON(response, 202, { ok: true });
       return;
     }
 
@@ -122,10 +185,73 @@ export function createBridgeServer(options: BridgeServerOptions): Server {
       }
     }
   }
+
+  function openE2eeStream(device: string, response: ServerResponse): void {
+    response.writeHead(200, SSE_HEADERS);
+    response.flushHeaders();
+    response.write(": connected\n\n");
+
+    let channel = e2eeChannels.get(device);
+    if (channel === undefined) {
+      channel = { stream: null, queue: [] };
+      e2eeChannels.set(device, channel);
+    }
+    // 同 device 新流顶替旧流:phone 重连时旧连接往往还没超时
+    channel.stream?.end();
+    channel.stream = response;
+    for (const frame of channel.queue) response.write(frame);
+    channel.queue = [];
+
+    response.on("close", () => {
+      const current = e2eeChannels.get(device);
+      if (current?.stream === response) current.stream = null;
+    });
+  }
+
+  /** io.send 的目标由「本次 handleFrame 的来源 device」决定,闭包绑到该 device 的下行 */
+  function e2eeSink(device: string): (frame: HostFrame) => void {
+    return (frame) => {
+      let channel = e2eeChannels.get(device);
+      if (channel === undefined) {
+        channel = { stream: null, queue: [] };
+        e2eeChannels.set(device, channel);
+      }
+      const data = `data: ${JSON.stringify(frame)}\n\n`;
+      if (channel.stream !== null) {
+        channel.stream.write(data);
+      } else {
+        channel.queue.push(data);
+        if (channel.queue.length > E2EE_QUEUE_LIMIT) channel.queue.shift();
+      }
+    };
+  }
+
+  function resolveE2eeDevice(frame: unknown): string | undefined {
+    if (typeof frame !== "object" || frame === null) return undefined;
+    const f = frame as Record<string, unknown>;
+    const phoneDeviceId = f["phoneDeviceId"];
+    const roomId = f["roomId"];
+    if (typeof phoneDeviceId === "string" && phoneDeviceId !== "") {
+      // clientHello / clientAuth 自带 device,顺手记下 room→device 供后续信封路由
+      if (typeof roomId === "string" && roomId !== "") {
+        e2eeRoomToDevice.set(roomId, phoneDeviceId);
+      }
+      return phoneDeviceId;
+    }
+    if (typeof roomId === "string" && roomId !== "") {
+      return e2eeRoomToDevice.get(roomId);
+    }
+    return undefined;
+  }
 }
 
 function formatFrame(event: BridgeEvent): string {
   return `data: ${JSON.stringify(event)}\n\n`;
+}
+
+function isLoopback(request: IncomingMessage): boolean {
+  const address = request.socket.remoteAddress ?? "";
+  return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
 }
 
 function authorized(request: IncomingMessage, token: string): boolean {
