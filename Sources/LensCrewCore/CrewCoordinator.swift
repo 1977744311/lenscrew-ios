@@ -8,10 +8,22 @@ import GlassesKit
 ///
 /// 眼镜不保存状态（DAT 的明确约定），所以导航状态机跑在手机上，
 /// 眼镜只是它的一块投影屏；眼镜和手机看到的是同一份 `CrewStore`。
+/// 给 UI 的状态快照。眼镜和手机看同一份数据，只是呈现方式不同。
+public struct CrewSnapshot: Sendable, Equatable {
+    public var sessions: [SessionState]
+    public var glassScreen: GlassScreen
+
+    public init(sessions: [SessionState], glassScreen: GlassScreen) {
+        self.sessions = sessions
+        self.glassScreen = glassScreen
+    }
+}
+
 public actor CrewCoordinator {
     private let bridge: any BridgeConnecting
     private let dispatcher: DisplayDispatcher?
     private let budget: GlassLayoutBudget
+    private let snapshotBus = StreamBroadcaster<CrewSnapshot>(replaysLatest: true)
 
     private var store = CrewStore()
     private var navigator = GlassNavigator()
@@ -28,6 +40,48 @@ public actor CrewCoordinator {
 
     public var sessions: [SessionState] { store.orderedSessions }
     public var screen: GlassScreen { navigator.screen }
+
+    /// 状态快照流。UI 不该去轮询 actor——每次状态变化推一份，SwiftUI 直接跟着走。
+    public nonisolated var snapshots: AsyncStream<CrewSnapshot> {
+        snapshotBus.subscribe()
+    }
+
+    // MARK: - 手机端动作
+
+    public func createSession(
+        agent: AgentKind, workspaceRoot: String,
+        model: String? = nil, mode: SessionMode = .default
+    ) async throws {
+        try await bridge.send(
+            .createSession(
+                agent: agent, workspaceRoot: workspaceRoot, model: model, mode: mode
+            )
+        )
+    }
+
+    public func sendMessage(_ text: String, to sessionID: String) async throws {
+        try await bridge.send(.sendMessage(sessionID: sessionID, text: text))
+    }
+
+    public func interrupt(_ sessionID: String) async throws {
+        try await bridge.send(.interrupt(sessionID: sessionID))
+    }
+
+    public func closeSession(_ sessionID: String) async throws {
+        try await bridge.send(.closeSession(sessionID: sessionID))
+    }
+
+    /// 手机上裁决审批。和眼镜上点按走同一条路：都不做乐观关闭，
+    /// 等 bridge 的 approvalSettled 回来才撤卡，否则两块屏会显示互相矛盾的状态。
+    public func resolveApproval(
+        sessionID: String, approvalID: String, optionID: String
+    ) async throws {
+        try await bridge.send(
+            .resolveApproval(
+                sessionID: sessionID, approvalID: approvalID, optionID: optionID
+            )
+        )
+    }
 
     /// 两条消费循环：bridge 下行事件、眼镜上行点击。
     public func run(glasses: (any GlassesSessionProviding)? = nil) async {
@@ -110,7 +164,14 @@ public actor CrewCoordinator {
         await renderToGlasses()
     }
 
+    private func publishSnapshot() {
+        snapshotBus.send(
+            CrewSnapshot(sessions: store.orderedSessions, glassScreen: navigator.screen)
+        )
+    }
+
     private func renderToGlasses() async {
+        publishSnapshot()
         guard let dispatcher else { return }
         let result = GlassScreenRenderer.render(
             screen: navigator.screen, store: store, budget: budget

@@ -79,9 +79,11 @@ cd bridge && node bin/lenscrew.ts up --host 0.0.0.0
 
 ## 现状
 
-M0 进行中。已完成：统一契约（TS + Swift 双向往返测试）、三个运行时的 adapter（各自带实测录制的 fixture）、bridge 的会话总线与本地 SSE 传输、眼镜端渲染与导航（分页、审批卡、稳定性保证）、客户端会话状态机（含断连补齐与断档检测）、iOS App target（带真实 MWDAT 编译通过）。
+M0 已跑通端到端：`lenscrew up` 起 bridge，手机连上去建真实 Cursor 会话、发消息、收到回复，全程走 HTTP + SSE。眼镜链路由 `Tests/LensCrewCoreTests/EndToEndTests.swift` 覆盖——真起 bridge 进程，一路验到眼镜屏上出现审批卡。
 
-未完成：端到端加密与二维码配对（现在只是局域网直连 + 防误连口令）、iOS 上真实的 bridge 连接与手机 UI、真机验证。真机验证依赖 Meta Wearables Developer Center 注册、Meta AI app v272+、眼镜固件 V127+。
+已完成：统一契约（TS + Swift 两侧都消费同一份 fixture）、三个运行时的 adapter（各自带实测录制的 fixture）、bridge 的会话总线与 SSE 传输、CLI、眼镜端渲染与导航（分页、审批卡、稳定性保证）、客户端会话状态机（断连补齐与断档检测）、iOS App（连接配置、会话列表、流水、审批、发消息，带真实 MWDAT 编译通过）。
+
+未完成：端到端加密与二维码配对（现在只是局域网直连 + 防误连口令）、git 操作面板、语音输入、眼镜真机验证。真机验证依赖 Meta Wearables Developer Center 注册、Meta AI app v272+、眼镜固件 V127+。
 
 ## 参考
 
