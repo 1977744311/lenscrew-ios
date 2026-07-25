@@ -1,0 +1,193 @@
+[
+  {
+    "type": "sessionCreated",
+    "seq": 1,
+    "session": {
+      "id": "s-001",
+      "agent": "codex",
+      "nativeId": "thread_abc",
+      "workspaceRoot": "/Users/dev/project",
+      "title": "修登录报错",
+      "model": "gpt-5-codex",
+      "status": "starting",
+      "capabilities": {
+        "approvals": true,
+        "steering": true,
+        "interrupt": true,
+        "planMode": true,
+        "resume": true,
+        "streamingDeltas": true
+      },
+      "createdAtMs": 1784985600000,
+      "updatedAtMs": 1784985600000
+    }
+  },
+  {
+    "type": "sessionStatus",
+    "seq": 2,
+    "sessionId": "s-001",
+    "status": "running"
+  },
+  {
+    "type": "blockAppended",
+    "seq": 3,
+    "sessionId": "s-001",
+    "block": {
+      "kind": "userMessage",
+      "id": "b-1",
+      "text": "帮我看看登录为什么 500",
+      "imageCount": 0
+    }
+  },
+  {
+    "type": "blockAppended",
+    "seq": 4,
+    "sessionId": "s-001",
+    "block": {
+      "kind": "reasoning",
+      "id": "b-2",
+      "text": "先看服务端日志",
+      "streaming": true
+    }
+  },
+  {
+    "type": "blockAppended",
+    "seq": 5,
+    "sessionId": "s-001",
+    "block": {
+      "kind": "agentMessage",
+      "id": "b-3",
+      "text": "我先跑一下测试。",
+      "streaming": true
+    }
+  },
+  {
+    "type": "blockUpdated",
+    "seq": 6,
+    "sessionId": "s-001",
+    "blockId": "b-3",
+    "patch": {
+      "appendText": "定位到 auth.ts。",
+      "streaming": false
+    }
+  },
+  {
+    "type": "blockAppended",
+    "seq": 7,
+    "sessionId": "s-001",
+    "block": {
+      "kind": "shellCommand",
+      "id": "b-4",
+      "command": "npm test -- auth",
+      "cwd": "/Users/dev/project",
+      "output": "",
+      "exitCode": null,
+      "status": "running"
+    }
+  },
+  {
+    "type": "approvalRequested",
+    "seq": 8,
+    "sessionId": "s-001",
+    "approval": {
+      "id": "a-1",
+      "kind": "shellCommand",
+      "title": "运行 npm test -- auth",
+      "detail": "npm test -- auth\n工作目录 /Users/dev/project",
+      "cwd": "/Users/dev/project",
+      "options": [
+        { "id": "approved", "label": "批准", "kind": "allow" },
+        { "id": "approved_for_session", "label": "本次会话都批", "kind": "allowAlways" },
+        { "id": "denied", "label": "拒绝", "kind": "deny" }
+      ],
+      "requestedAtMs": 1784985601000
+    }
+  },
+  {
+    "type": "approvalSettled",
+    "seq": 9,
+    "sessionId": "s-001",
+    "approvalId": "a-1",
+    "optionId": "approved",
+    "outcome": "resolved"
+  },
+  {
+    "type": "blockUpdated",
+    "seq": 10,
+    "sessionId": "s-001",
+    "blockId": "b-4",
+    "patch": {
+      "appendText": "PASS auth.test.ts\n",
+      "status": "ok",
+      "exitCode": 0
+    }
+  },
+  {
+    "type": "blockAppended",
+    "seq": 11,
+    "sessionId": "s-001",
+    "block": {
+      "kind": "fileChange",
+      "id": "b-5",
+      "files": [{ "path": "src/auth.ts", "added": 12, "removed": 3 }],
+      "status": "ok"
+    }
+  },
+  {
+    "type": "blockAppended",
+    "seq": 12,
+    "sessionId": "s-001",
+    "block": {
+      "kind": "toolCall",
+      "id": "b-6",
+      "source": "context7",
+      "tool": "query-docs",
+      "summary": "查 express 错误中间件用法",
+      "status": "ok"
+    }
+  },
+  {
+    "type": "blockAppended",
+    "seq": 13,
+    "sessionId": "s-001",
+    "block": {
+      "kind": "plan",
+      "id": "b-7",
+      "steps": [
+        { "text": "复现 500", "status": "done" },
+        { "text": "补错误中间件", "status": "running" },
+        { "text": "加回归测试", "status": "pending" }
+      ]
+    }
+  },
+  {
+    "type": "blockAppended",
+    "seq": 14,
+    "sessionId": "s-001",
+    "block": {
+      "kind": "error",
+      "id": "b-8",
+      "message": "工具调用超时"
+    }
+  },
+  {
+    "type": "turnCompleted",
+    "seq": 15,
+    "sessionId": "s-001",
+    "inputTokens": 4210,
+    "outputTokens": 883
+  },
+  {
+    "type": "sessionClosed",
+    "seq": 16,
+    "sessionId": "s-001",
+    "reason": "用户关闭"
+  },
+  {
+    "type": "bridgeError",
+    "seq": 17,
+    "sessionId": null,
+    "message": "codex app-server 退出",
+    "fatal": true
+  }
+]

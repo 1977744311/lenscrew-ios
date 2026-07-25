@@ -1,0 +1,20 @@
+{
+  "name": "lenscrew-bridge",
+  "version": "0.0.1",
+  "private": true,
+  "description": "LensCrew Mac bridge: drives local Codex, Claude Code, and Cursor Agent runtimes behind one contract",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "bin": {
+    "lenscrew": "./bin/lenscrew.ts"
+  },
+  "scripts": {
+    "test": "node --test 'test/**/*.test.ts'",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}

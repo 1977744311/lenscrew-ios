@@ -1,0 +1,15 @@
+.DS_Store
+
+# Swift / Xcode
+.build/
+.swiftpm/
+DerivedData/
+*.xcodeproj
+*.xcworkspace
+
+# Node
+node_modules/
+
+# 本机运行时状态：配对密钥、会话缓存，绝不入库
+.lenscrew/
+tmp/
