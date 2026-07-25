@@ -100,6 +100,11 @@ export function createBridgeServer(options: BridgeServerOptions): Server {
 
   function openStream(url: URL, response: ServerResponse): void {
     response.writeHead(200, SSE_HEADERS);
+    response.flushHeaders();
+    // 开流就先写一行注释当序幕。实测 URLSession 要等到第一个 body 字节才肯把响应
+    // 交给调用方，而新客户端接进来时往往没有历史可补发，第一个字节就成了心跳——
+    // 客户端会一直卡在建流上，把整个心跳周期都等掉。注释行会被 SSE 解码器忽略。
+    response.write(": connected\n\n");
     subscribers.add(response);
     response.on("close", () => subscribers.delete(response));
 
