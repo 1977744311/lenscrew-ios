@@ -90,6 +90,22 @@ extension BridgeHostConfig {
     }
 }
 
+/// 敏感字段（口令 / mac 身份公钥）的存取抽象。生产实现是 Keychain
+/// （KeychainSecretStore）；单测在无签名构建（CODE_SIGNING_ALLOWED=NO）下拿不到
+/// keychain entitlement，注入内存实现。契约与 Keychain 版一致：写空串等价删除。
+protocol HostSecretStoring {
+    func read(account: String) -> String?
+    func write(_ value: String, account: String)
+    func delete(account: String)
+}
+
+/// HostKeychain 的实例化外壳，让 HostStore 能以协议持有它
+struct KeychainSecretStore: HostSecretStoring {
+    func read(account: String) -> String? { HostKeychain.read(account: account) }
+    func write(_ value: String, account: String) { HostKeychain.write(value, account: account) }
+    func delete(account: String) { HostKeychain.delete(account: account) }
+}
+
 /// 多主机配置仓：每台 Mac 跑自己的 bridge，这里管配置、口令与 active 切换。
 ///
 /// 非敏感字段 JSON 存 UserDefaults（bridge.hosts.v1）；口令每主机一条 Keychain 记录
@@ -107,8 +123,17 @@ final class HostStore {
         hosts.first { $0.id == activeHostID }
     }
 
-    init() {
-        let defaults = UserDefaults.standard
+    /// 非敏感字段的落点。生产恒为 .standard；测试/UI 夹具注入独立 suite 免污染
+    private let defaults: UserDefaults
+    /// 敏感字段的落点。生产恒为 Keychain；单测按可用性注入（见 HostSecretStoring）
+    private let secrets: any HostSecretStoring
+
+    init(
+        defaults: UserDefaults = .standard,
+        secrets: any HostSecretStoring = KeychainSecretStore()
+    ) {
+        self.defaults = defaults
+        self.secrets = secrets
         workspaceRoots = defaults.stringArray(forKey: Keys.roots) ?? []
 
         if let data = defaults.data(forKey: Keys.hosts),
@@ -131,9 +156,8 @@ final class HostStore {
     /// 首次载入时原样搬进列表，命名「我的 Mac」并设为 active；只跑一次——
     /// 跑完 bridge.hosts.v1 键就存在了，旧键随即清掉。
     private func migrateLegacySingleHost() {
-        let defaults = UserDefaults.standard
         let legacyHost = defaults.string(forKey: Keys.legacyHost) ?? ""
-        let legacyToken = HostKeychain.read(account: HostKeychain.legacyAccount) ?? ""
+        let legacyToken = secrets.read(account: HostKeychain.legacyAccount) ?? ""
         guard !legacyHost.isEmpty || !legacyToken.isEmpty else { return }
 
         let config = BridgeHostConfig(
@@ -146,8 +170,8 @@ final class HostStore {
         )
         hosts = [config]
         activeHostID = config.id
-        HostKeychain.write(legacyToken, account: config.id.uuidString)
-        HostKeychain.delete(account: HostKeychain.legacyAccount)
+        secrets.write(legacyToken, account: config.id.uuidString)
+        secrets.delete(account: HostKeychain.legacyAccount)
         defaults.removeObject(forKey: Keys.legacyHost)
         defaults.removeObject(forKey: Keys.legacyPort)
     }
@@ -160,7 +184,7 @@ final class HostStore {
             id: UUID(), name: name, host: host, port: port, lastConnectedAt: nil
         )
         hosts.append(config)
-        HostKeychain.write(token, account: config.id.uuidString)
+        secrets.write(token, account: config.id.uuidString)
         if activeHostID == nil { activeHostID = config.id }
         persist()
         return config
@@ -178,7 +202,7 @@ final class HostStore {
             hosts[index].lanHost = lanHost
             hosts[index].lanPort = lanPort
             hosts[index].relay = relay
-            HostKeychain.write(
+            secrets.write(
                 macIdentityPublicKey, account: Self.macIdentityAccount(hosts[index].id)
             )
             persist()
@@ -192,7 +216,7 @@ final class HostStore {
         config.lanPort = lanPort
         config.relay = relay
         hosts.append(config)
-        HostKeychain.write(macIdentityPublicKey, account: Self.macIdentityAccount(config.id))
+        secrets.write(macIdentityPublicKey, account: Self.macIdentityAccount(config.id))
         if activeHostID == nil { activeHostID = config.id }
         persist()
         return config
@@ -200,13 +224,13 @@ final class HostStore {
 
     /// paired 主机的 mac 身份公钥（trusted_reconnect 的信任根）
     func macIdentityPublicKey(for id: UUID) -> String? {
-        HostKeychain.read(account: Self.macIdentityAccount(id))
+        secrets.read(account: Self.macIdentityAccount(id))
     }
 
     func remove(_ id: UUID) {
         hosts.removeAll { $0.id == id }
-        HostKeychain.delete(account: id.uuidString)
-        HostKeychain.delete(account: Self.macIdentityAccount(id))
+        secrets.delete(account: id.uuidString)
+        secrets.delete(account: Self.macIdentityAccount(id))
         if activeHostID == id { activeHostID = hosts.first?.id }
         persist()
     }
@@ -228,11 +252,11 @@ final class HostStore {
     }
 
     func token(for id: UUID) -> String {
-        HostKeychain.read(account: id.uuidString) ?? ""
+        secrets.read(account: id.uuidString) ?? ""
     }
 
     func setToken(_ token: String, for id: UUID) {
-        HostKeychain.write(token, account: id.uuidString)
+        secrets.write(token, account: id.uuidString)
     }
 
     // MARK: - 工作目录 MRU
@@ -251,7 +275,6 @@ final class HostStore {
     // MARK: - 持久化
 
     private func persist() {
-        let defaults = UserDefaults.standard
         if let data = try? JSONEncoder().encode(hosts) {
             defaults.set(data, forKey: Keys.hosts)
         }

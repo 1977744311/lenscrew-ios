@@ -8,6 +8,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { renderPairingQr } from "../src/qr/index.ts";
+
 const BIN = fileURLToPath(new URL("../bin/lenscrew.ts", import.meta.url));
 
 interface Spawned {
@@ -131,6 +133,62 @@ test("lenscrew up --port 0:生成 admin.json,/admin/pairing 可重开配对窗�
     // 默认回环监听、未启用 relay:payload 不该有 lan/relay
     assert.ok(!("lan" in payload));
     assert.ok(!("relay" in payload));
+  } finally {
+    await stopCli(spawned);
+  }
+});
+
+test("up 日志的配对 payload 可被 qr 模块编码;lenscrew qr 对运行中 bridge 重开新窗口", async () => {
+  const stateDir = mkdtempSync(join(tmpdir(), "lenscrew-cli-qr-"));
+  const spawned = spawnCli(["up", "--port", "0", "--name", "QR Test Mac"], {
+    LENSCREW_STATE_DIR: stateDir,
+  });
+
+  async function waitFor(check: () => boolean, what: string, timeoutMs = 15000): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (!check()) {
+      if (Date.now() > deadline) {
+        assert.fail(`等待超时: ${what}\nstdout:\n${spawned.stdout()}\nstderr:\n${spawned.stderr()}`);
+      }
+      await new Promise((r) => setTimeout(r, 25));
+    }
+  }
+
+  function extractPayload(stdout: string): Record<string, unknown> {
+    const line = stdout.split("\n").find((entry) => entry.includes('"kind":"lenscrew-pair"'));
+    assert.ok(line !== undefined, `输出里找不到配对 payload:\n${stdout}`);
+    return JSON.parse(line.slice(line.indexOf("{"))) as Record<string, unknown>;
+  }
+
+  try {
+    // 启动日志包含单行配对 payload(runUp 在 admin.json 写盘之后才打印它)
+    await waitFor(() => spawned.stdout().includes('"kind":"lenscrew-pair"'), "启动日志包含配对 payload");
+    const bootPayload = extractPayload(spawned.stdout());
+    assert.equal(bootPayload["kind"], "lenscrew-pair");
+
+    // qr 模块能对同一 payload 编码:不抛、产出非空多行 ANSI 块
+    const rendered = renderPairingQr(JSON.stringify(bootPayload));
+    assert.ok(rendered.length > 0);
+    assert.ok(rendered.split("\n").length > 10, "二维码应是多行终端块");
+
+    // 对运行中的 bridge 跑 `lenscrew qr`:经 admin.json 重开配对窗口,拿到新 expiresAtMs
+    const before = Date.now();
+    const qrCli = spawnCli(["qr", "--state-dir", stateDir], {});
+    await once(qrCli.child, "exit");
+    assert.equal(qrCli.child.exitCode, 0, `lenscrew qr 退出异常:\n${qrCli.stderr()}`);
+    assert.ok(qrCli.stdout().includes("配对窗口至"));
+
+    const qrPayload = extractPayload(qrCli.stdout());
+    const expiresAtMs = qrPayload["expiresAtMs"];
+    assert.ok(
+      typeof expiresAtMs === "number" && expiresAtMs >= before + 4 * 60_000,
+      "重开后应是新的约 5 分钟窗口",
+    );
+    assert.ok(
+      (expiresAtMs as number) > (bootPayload["expiresAtMs"] as number),
+      "新窗口必须晚于启动时的窗口",
+    );
+    assert.equal(qrPayload["macDeviceId"], bootPayload["macDeviceId"], "身份不因重开而漂移");
   } finally {
     await stopCli(spawned);
   }

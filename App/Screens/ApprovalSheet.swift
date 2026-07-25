@@ -58,6 +58,7 @@ struct ApprovalSheet: View {
                     .font(.system(size: 18, weight: .bold))
                     .foregroundStyle(LC.text)
                     .lineLimit(2)
+                    .accessibilityIdentifier("approval.title")
                 Text(
                     "\(presentation.sessionTitle) · \(agentLabel(presentation.agent))"
                         + " · 不在自动放行名单"
@@ -97,6 +98,7 @@ struct ApprovalSheet: View {
         .overlay(
             RoundedRectangle(cornerRadius: 12).strokeBorder(LC.line, lineWidth: 0.5)
         )
+        .accessibilityIdentifier("approval.detail")
     }
 
     private func cwdRow(_ cwd: String) -> some View {
@@ -159,6 +161,7 @@ struct ApprovalSheet: View {
             LCButton(title: "允许一次", kind: .primary, icon: "checkmark") {
                 submit(option)
             }
+            .accessibilityIdentifier("approval.allowOnce")
         case (.allow, _):
             LCButton(title: "本会话内都允许", kind: .tinted) { submit(option) }
         case (.deny, .once):

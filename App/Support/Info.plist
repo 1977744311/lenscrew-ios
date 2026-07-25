@@ -20,8 +20,12 @@
 	<string>1</string>
 	<key>MWDAT</key>
 	<dict>
+		<key>ClientToken</key>
+		<string>$(MWDAT_CLIENT_TOKEN)</string>
 		<key>DAMEnabled</key>
 		<true/>
+		<key>MetaAppID</key>
+		<string>$(MWDAT_META_APP_ID)</string>
 	</dict>
 	<key>NSAppTransportSecurity</key>
 	<dict>

@@ -72,8 +72,9 @@ final class WatchBridge: NSObject {
         lastApprovalIDs = ids
     }
 
-    /// VM 聚合态 → 手表 DTO：只带腕上要渲染的字段，长文本按 WatchWire 上限截断
-    private static func buildSnapshot(
+    /// VM 聚合态 → 手表 DTO：只带腕上要渲染的字段，长文本按 WatchWire 上限截断。
+    /// internal 而非 private：纯映射，LensCrewAppTests 直接对它做裁剪断言。
+    static func buildSnapshot(
         approvals: [PendingApprovalItem], sessions: [AggregatedSession]
     ) -> WatchSnapshot {
         WatchSnapshot(

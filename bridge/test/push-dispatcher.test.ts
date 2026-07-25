@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { createPushDispatcher, truncateForAlert } from "../src/push/pushDispatcher.ts";
 import type { PushTokenRegistry } from "../src/push/pushDispatcher.ts";
-import type { BridgeEvent, TurnStopReason } from "../src/protocol/events.ts";
+import type { ApprovalOption, BridgeEvent, TurnStopReason } from "../src/protocol/events.ts";
 
 function makeRegistry(): PushTokenRegistry {
   return {
@@ -20,7 +20,11 @@ function makeRegistry(): PushTokenRegistry {
   };
 }
 
-function approvalEvent(approvalId: string, detail = "npm install left-pad"): BridgeEvent {
+function approvalEvent(
+  approvalId: string,
+  detail = "npm install left-pad",
+  options: ApprovalOption[] = [],
+): BridgeEvent {
   return {
     type: "approvalRequested",
     seq: 7,
@@ -31,11 +35,17 @@ function approvalEvent(approvalId: string, detail = "npm install left-pad"): Bri
       title: "运行 shell 命令",
       detail,
       cwd: null,
-      options: [],
+      options,
       requestedAtMs: 0,
     },
   };
 }
+
+function lenscrewDict(pushes: ReturnType<PushDispatcher["dispatch"]>): Record<string, unknown> {
+  return pushes[0]!.payload["lenscrew"] as Record<string, unknown>;
+}
+
+type PushDispatcher = ReturnType<typeof createPushDispatcher>;
 
 test("approvalRequested:只发给 alertsEnabled.approvals 的 token,payload 逐字段符合约定", () => {
   const dispatcher = createPushDispatcher();
@@ -64,6 +74,61 @@ test("approvalRequested:同一 approvalId 幂等只发一次,新 id 正常发", 
   assert.equal(dispatcher.dispatch(approvalEvent("appr-1"), registry).length, 1);
   assert.equal(dispatcher.dispatch(approvalEvent("appr-1"), registry).length, 0);
   assert.equal(dispatcher.dispatch(approvalEvent("appr-2"), registry).length, 1);
+});
+
+test("approvalRequested:lenscrew 带 macDeviceId 与裁决 optionId(allow+once 优先,deny 取首个)", () => {
+  const dispatcher = createPushDispatcher();
+  const options: ApprovalOption[] = [
+    { id: "acceptForSession", label: "本会话都批", kind: "allow", scope: "session" },
+    { id: "accept", label: "批准", kind: "allow", scope: "once" },
+    { id: "decline", label: "拒绝", kind: "deny", scope: "once" },
+    { id: "declineAlways", label: "永久拒绝", kind: "deny", scope: "persistent" },
+  ];
+  const pushes = dispatcher.dispatch(approvalEvent("appr-opt", "npm test", options), makeRegistry(), {
+    macDeviceId: "mac-1",
+  });
+  assert.deepEqual(lenscrewDict(pushes), {
+    kind: "approval",
+    sessionId: "session-1",
+    approvalId: "appr-opt",
+    macDeviceId: "mac-1",
+    onceAllowOptionId: "accept",
+    denyOptionId: "decline",
+  });
+});
+
+test("approvalRequested:没有 once 档时 onceAllowOptionId 退化取任意 allow", () => {
+  const dispatcher = createPushDispatcher();
+  const options: ApprovalOption[] = [
+    { id: "acceptForSession", label: "本会话都批", kind: "allow", scope: "session" },
+  ];
+  const dict = lenscrewDict(
+    dispatcher.dispatch(approvalEvent("appr-fallback", "npm test", options), makeRegistry(), {
+      macDeviceId: "mac-1",
+    }),
+  );
+  assert.equal(dict["onceAllowOptionId"], "acceptForSession");
+  assert.ok(!("denyOptionId" in dict), "没有 deny 档时 denyOptionId 必须缺席");
+});
+
+test("approvalRequested:没有 allow 档时 onceAllowOptionId 缺席,deny 照常携带", () => {
+  const dispatcher = createPushDispatcher();
+  const options: ApprovalOption[] = [
+    { id: "decline", label: "拒绝", kind: "deny", scope: "once" },
+  ];
+  const dict = lenscrewDict(
+    dispatcher.dispatch(approvalEvent("appr-deny-only", "npm test", options), makeRegistry(), {
+      macDeviceId: "mac-1",
+    }),
+  );
+  assert.ok(!("onceAllowOptionId" in dict), "没有 allow 档时 onceAllowOptionId 必须缺席");
+  assert.equal(dict["denyOptionId"], "decline");
+});
+
+test("approvalRequested:context 没给 macDeviceId、options 为空时三个字段全缺席", () => {
+  const dispatcher = createPushDispatcher();
+  const dict = lenscrewDict(dispatcher.dispatch(approvalEvent("appr-bare"), makeRegistry()));
+  assert.deepEqual(dict, { kind: "approval", sessionId: "session-1", approvalId: "appr-bare" });
 });
 
 test("approval detail 超长时 body 截 160 字符", () => {

@@ -123,6 +123,8 @@ struct GlassesScreen: View {
             HStack {
                 Spacer()
                 GlassNodePreview(node: output.node)
+                    .accessibilityElement(children: .contain)
+                    .accessibilityIdentifier("glasses.preview")
                 Spacer()
             }
             .padding(12)

@@ -57,7 +57,7 @@ struct PendingApprovalItem: Identifiable, Sendable {
 @MainActor
 @Observable
 final class CrewViewModel {
-    let hosts = HostStore()
+    let hosts: HostStore
 
     /// 每台已配置主机一条连接单元；key = 主机 UUID
     private(set) var links: [UUID: HostLink] = [:]
@@ -149,6 +149,8 @@ final class CrewViewModel {
     }
 
     init() {
+        // UI 测试夹具启动时换独立 suite 的 store（预置假主机）；正常启动走 standard
+        hosts = UITestFixture.isActive ? UITestFixture.makeHostStore() : HostStore()
         let defaults = UserDefaults.standard
         autoPresentApprovals =
             defaults.object(forKey: PrefKeys.autoPresentApprovals) as? Bool ?? true
@@ -191,6 +193,7 @@ final class CrewViewModel {
             realGlasses: glasses,
             focused: id == focusedHostID,
             autoPresentApprovals: autoPresentApprovals,
+            fixtureConnection: UITestFixture.isActive ? UITestFixture.makeConnection() : nil,
             reportError: { [weak self] message in
                 self?.reportHostError(message, hostID: id)
             },

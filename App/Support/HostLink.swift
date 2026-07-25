@@ -37,6 +37,8 @@ final class HostLink: Identifiable {
     private(set) var coordinator: CrewCoordinator?
 
     private let store: HostStore
+    /// UI 测试夹具注入的内存连接；非 nil 时 connect() 直接用它，跳过真实网络
+    private let fixtureConnection: (any BridgeConnecting)?
     /// 本主机的眼镜出口：聚焦走真机，失焦落私有 Mock
     private let glassesGate: FocusRoutedGlassesSession
     private var connection: BridgeConnectionTap?
@@ -68,11 +70,13 @@ final class HostLink: Identifiable {
         realGlasses: any GlassesSessionProviding,
         focused: Bool,
         autoPresentApprovals: Bool,
+        fixtureConnection: (any BridgeConnecting)? = nil,
         reportError: @escaping @MainActor (String?) -> Void,
         pushRegistration: @escaping @MainActor () -> (tokenHex: String, alerts: PushAlertsEnabled)?
     ) {
         self.hostID = hostID
         self.store = store
+        self.fixtureConnection = fixtureConnection
         self.glassesGate = FocusRoutedGlassesSession(real: realGlasses, focused: focused)
         self.autoPresentApprovals = autoPresentApprovals
         self.reportError = reportError
@@ -89,6 +93,15 @@ final class HostLink: Identifiable {
         guard let host = store.hosts.first(where: { $0.id == hostID }) else { return }
         await disconnect()
         await glassesGate.activate()
+        if let fixtureConnection {
+            // UI 测试夹具：网络换成内存脚本，泵/协调器等接线与生产完全一致
+            do {
+                try await start(base: fixtureConnection, host: host)
+            } catch {
+                reportError(describeBridgeError(error))
+            }
+            return
+        }
         if host.isPaired {
             await connectPaired(host)
         } else {

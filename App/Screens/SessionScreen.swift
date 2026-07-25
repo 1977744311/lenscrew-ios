@@ -536,6 +536,7 @@ struct SessionScreen: View {
             .background(LC.orange.opacity(0.13), in: RoundedRectangle(cornerRadius: 14))
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("session.approvalRow")
     }
 
     private func presentApproval(id: String) {

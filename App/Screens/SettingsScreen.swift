@@ -242,6 +242,7 @@ struct SettingsScreen: View {
             .font(.system(size: 13, weight: .semibold))
             .foregroundStyle(LC.text2)
             .textCase(nil)
+            .accessibilityIdentifier("settings.section.\(title)")
     }
 
     private var chevron: some View {

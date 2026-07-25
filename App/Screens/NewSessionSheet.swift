@@ -67,6 +67,7 @@ struct NewSessionSheet: View {
                 }
                 dismiss()
             }
+            .accessibilityIdentifier("newSession.start")
             .disabled(effectiveRoot.isEmpty || !targetConnected)
             .opacity(effectiveRoot.isEmpty || !targetConnected ? 0.5 : 1)
         }
@@ -175,6 +176,7 @@ struct NewSessionSheet: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("newSession.agent.\(kind.rawValue)")
     }
 
     /// 副行：该 agent 在目标主机上最近一个会话用的 model；没有就只说它跑在本机。

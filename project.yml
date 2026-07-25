@@ -72,6 +72,49 @@ targets:
         SWIFT_VERSION: "6.0"
         TARGETED_DEVICE_FAMILY: "1"
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+    # 显式共享 scheme：App 单测与 UI 测试都挂在 LensCrew scheme 的 test action 上，
+    # `xcodebuild test -scheme LensCrew -only-testing:<target>` 按需选跑
+    scheme:
+      testTargets:
+        - LensCrewAppTests
+        - LensCrewUITests
+
+  # App 层纯逻辑单测（swift-testing），宿主进程 = LensCrew.app：
+  # @testable import LensCrew，模拟器 Keychain/UserDefaults 真实可用。
+  # 库层（Sources/）的测试仍走 swift test，不进这里。
+  LensCrewAppTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - AppTests
+    dependencies:
+      - target: LensCrew
+      # 测试代码要直接构造 AgentSession/SessionState 等库层类型
+      - package: LensCrewKit
+        products:
+          - AgentProtocol
+          - LensCrewCore
+    settings:
+      base:
+        SWIFT_VERSION: "6.0"
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: $(BUILT_PRODUCTS_DIR)/LensCrew.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/LensCrew
+        BUNDLE_LOADER: $(TEST_HOST)
+
+  # UI 自动化（XCUITest）。被测 App 以 -uitest-fixture 启动，
+  # 走 App/Support/UITestFixture.swift 的内存脚本连接，不碰网络。
+  LensCrewUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - UITests
+    dependencies:
+      - target: LensCrew
+    settings:
+      base:
+        SWIFT_VERSION: "6.0"
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: LensCrew
 
   # 腕上审批器 + 一瞥（现代单 target 手表 app）。只依赖 AgentProtocol：
   # 手表不引 BridgeLink/SDK 层，不做加密不连网，一切经 iPhone 的 WatchBridge 中转。
@@ -103,6 +146,8 @@ targets:
         TARGETED_DEVICE_FAMILY: "4"
         # 手表 app 的 bundle id 必须挂在宿主 iOS app 之下
         PRODUCT_BUNDLE_IDENTIFIER: dev.steven.LensCrew.watchkitapp
+    # LensCrew 定义了共享 scheme 后，其余 target 的自动 scheme 不再可靠，显式补一个
+    scheme: {}
 
   # W4 · Smart Stack 小组件（WidgetKit / accessoryRectangular）。
   # 不依赖 AgentProtocol：数据经 WatchGlanceStore（app group defaults）交接。

@@ -57,8 +57,11 @@ struct RootView: View {
         .preferredColorScheme(.dark)
         .tint(LC.blue)
         .task {
-            // 通知管线先接上：冷启动攒下的深链与 token 都靠 attach 冲账
-            PushCoordinator.shared.attach(model)
+            // 通知管线先接上：冷启动攒下的深链与 token 都靠 attach 冲账。
+            // UI 夹具下跳过——requestAuthorization 的系统弹窗会卡住 XCUITest。
+            if !UITestFixture.isActive {
+                PushCoordinator.shared.attach(model)
+            }
             // 手表中转：把聚合审批/会话推上腕、接回裁决（手表不直连 bridge）
             WatchBridge.shared.attach(model)
             applyPendingRoute()
@@ -109,6 +112,7 @@ private struct TabDock: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("新会话")
+            .accessibilityIdentifier("dock.newSession")
         }
         .padding(.horizontal, 20)
         .padding(.top, 10)
@@ -141,5 +145,6 @@ private struct TabDock: View {
             .frame(maxWidth: .infinity)
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("tab.\(String(describing: target))")
     }
 }

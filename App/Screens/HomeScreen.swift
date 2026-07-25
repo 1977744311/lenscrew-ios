@@ -144,6 +144,7 @@ struct HomeScreen: View {
                 title: "等你审批 · \(model.pendingApprovalItems.count)",
                 titleColor: LC.orange
             )
+            .accessibilityIdentifier("home.approvalsHeader")
             ForEach(model.pendingApprovalItems) { item in
                 approvalCard(item)
             }
@@ -189,6 +190,7 @@ struct HomeScreen: View {
                 LCButton(title: "查看上下文", kind: .tinted, minHeight: 40, fontSize: 14) {
                     path.append(item.key)
                 }
+                .accessibilityIdentifier("home.approval.context")
                 if let once = onceAllowOption(approval) {
                     LCButton(
                         title: resolving ? "等待确认…" : "允许一次",
@@ -213,6 +215,8 @@ struct HomeScreen: View {
             RoundedRectangle(cornerRadius: 20)
                 .strokeBorder(LC.orange.opacity(0.35), lineWidth: 0.5)
         )
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("home.approvalCard")
     }
 
     private func onceAllowOption(_ approval: ApprovalRequest) -> ApprovalOption? {
@@ -248,6 +252,7 @@ struct HomeScreen: View {
                             sessionRow(item)
                         }
                         .buttonStyle(.plain)
+                        .accessibilityIdentifier("home.sessionCard")
                     }
                 }
                 .background(LC.elev, in: RoundedRectangle(cornerRadius: 20))
