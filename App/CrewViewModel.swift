@@ -43,6 +43,10 @@ final class CrewViewModel {
     private(set) var lastError: String?
     /// /health 往返毫秒数，Home 顶部主机 chip 用；连不上为 nil
     private(set) var latencyMs: Int?
+    /// paired 主机实际走的链路（直连/中继）；manual 主机或未连接为 nil
+    private(set) var linkPath: HostLinkPath?
+    /// 通知深链的目的地（sessionID）；RootView 观察它完成导航后清掉
+    private(set) var pendingSessionRoute: String?
     /// sessionID → 轮次分隔线（按到达顺序）
     private(set) var turnMarkers: [String: [TurnMarker]] = [:]
     /// 本机发起创建的会话的模式；listSessions 拉回的旧会话拿不到，不硬猜
@@ -56,6 +60,10 @@ final class CrewViewModel {
     private let glasses = GlassesRuntime.makeSession()
     private var connection: BridgeConnectionTap?
     private var coordinator: CrewCoordinator?
+    /// 当前 paired 主机的安全连接（registerPush 只有它有）；manual 连接时为 nil
+    private var secureConnection: SecureBridgeConnection?
+    /// APNs device token（hex），注册回调到达后缓存，连接建立/开关变化时重发
+    private var apnsTokenHex: String?
     private var pumps: [Task<Void, Never>] = []
     /// 等待与 sessionCreated 配对的创建模式（FIFO，见 digest）
     private var pendingModes: [SessionMode] = []
@@ -95,6 +103,16 @@ final class CrewViewModel {
             lastError = "先在设置里添加一台电脑"
             return
         }
+        await disconnect()
+        if host.isPaired {
+            await connectPaired(host)
+        } else {
+            await connectManual(host)
+        }
+    }
+
+    /// manual 主机：口令 + 明文 HTTP，行为与改造前完全一致
+    private func connectManual(_ host: BridgeHostConfig) async {
         guard let baseURL = host.baseURL, !host.host.isEmpty else {
             lastError = "主机地址无效，去设置里改一下"
             return
@@ -104,13 +122,60 @@ final class CrewViewModel {
             lastError = "这台电脑还没填访问口令"
             return
         }
-        await disconnect()
-
-        let connection = BridgeConnectionTap(
-            wrapping: HTTPBridgeConnection(
-                endpoint: BridgeEndpoint(baseURL: baseURL, token: token)
+        do {
+            try await start(
+                base: HTTPBridgeConnection(
+                    endpoint: BridgeEndpoint(baseURL: baseURL, token: token)
+                ),
+                host: host
             )
-        )
+            startHealthLoop(baseURL: baseURL)
+        } catch {
+            lastError = describe(error)
+        }
+    }
+
+    /// paired 主机：LAN 直连优先，失败且有 relay 再走中继；两条都不通把失败挂到
+    /// linkState 上展示。trustedMac 公钥来自 Keychain，走 trusted_reconnect。
+    private func connectPaired(_ host: BridgeHostConfig) async {
+        guard let publicKey = hosts.macIdentityPublicKey(for: host.id) else {
+            lastError = "配对记录不完整（缺 Mac 身份公钥），删除这台电脑后重新扫码"
+            return
+        }
+        let attempts = host.pairedEndpoints(macIdentityPublicKey: publicKey)
+        guard !attempts.isEmpty else {
+            lastError = "这台电脑没有可用的连接方式，重新扫码配对一次"
+            return
+        }
+        var failure = "无法连接"
+        for attempt in attempts {
+            let secure = SecureBridgeConnection(endpoint: attempt.endpoint)
+            do {
+                try await start(base: secure, host: host, capSeconds: 15)
+                secureConnection = secure
+                linkPath = attempt.path
+                // /health 是 bridge 的直连端点，relay 上没有，延迟计量只在直连时有
+                if case let .direct(baseURL) = attempt.endpoint.transport {
+                    startHealthLoop(baseURL: baseURL)
+                }
+                await sendPushRegistration()
+                return
+            } catch {
+                failure = humanizeSecureError(describe(error))
+                await disconnect()
+            }
+        }
+        lastError = failure
+        linkState = .failed(failure)
+    }
+
+    /// 两种形态共用的接线：包旁路、起协调器与泵、握手、拉存量会话。
+    /// capSeconds 给安全连接的首次握手加上限——LAN 地址不可达时不能陪系统
+    /// TCP 超时耗完，否则 relay 兜底迟迟接不了手。
+    private func start(
+        base: any BridgeConnecting, host: BridgeHostConfig, capSeconds: Double? = nil
+    ) async throws {
+        let connection = BridgeConnectionTap(wrapping: base)
         let coordinator = CrewCoordinator(bridge: connection, glasses: glasses)
         self.connection = connection
         self.coordinator = coordinator
@@ -119,7 +184,7 @@ final class CrewViewModel {
         pumps.append(
             Task { [weak self] in
                 for await state in connection.linkStates {
-                    await MainActor.run { self?.linkState = state }
+                    await MainActor.run { self?.absorb(linkState: state) }
                 }
             }
         )
@@ -142,15 +207,23 @@ final class CrewViewModel {
         )
         pumps.append(Task { [glasses] in await coordinator.run(glasses: glasses) })
 
-        do {
+        if let capSeconds, let secure = base as? SecureBridgeConnection {
+            try await secure.connectCapped(seconds: capSeconds)
+        } else {
             try await connection.connect()
-            // 已经在跑的会话要拉回来，否则手机重启后看不到 Mac 上的现场
-            try await connection.send(.listSessions)
-            hosts.markConnected(host.id)
-            startHealthLoop(baseURL: baseURL)
-            lastError = nil
-        } catch {
-            lastError = describe(error)
+        }
+        // 已经在跑的会话要拉回来，否则手机重启后看不到 Mac 上的现场
+        try await connection.send(.listSessions)
+        hosts.markConnected(host.id)
+        lastError = nil
+    }
+
+    /// linkStates 泵的落点：paired 连接每次（重）建立都把推送注册补发一遍——
+    /// SecureBridgeConnection 内部断线重连不会重走 connect()，只有这里能看到
+    private func absorb(linkState state: BridgeLinkState) {
+        linkState = state
+        if case .connected = state, secureConnection != nil {
+            Task { await self.sendPushRegistration() }
         }
     }
 
@@ -160,6 +233,8 @@ final class CrewViewModel {
         await connection?.disconnect()
         connection = nil
         coordinator = nil
+        secureConnection = nil
+        linkPath = nil
         sessions = []
         turnMarkers = [:]
         sessionModes = [:]
@@ -192,6 +267,102 @@ final class CrewViewModel {
             await disconnect()
             await connect()
         }
+    }
+
+    // MARK: - 扫码配对
+
+    /// qr_bootstrap 首配：用二维码 payload 建临时连接完成握手（验签通过才算数），
+    /// 把学到的 TrustedMac 持久化成 paired 主机并切换过去。之后的每次连接
+    /// （包括冷启动）都凭 Keychain 里的公钥走 trusted_reconnect，二维码一次性。
+    func pair(with payload: PairingPayload) async throws {
+        let phone = PhonePairingIdentity.shared
+        var transports: [SecureBridgeEndpoint.Transport] = []
+        if let lan = payload.lan, let url = URL(string: "http://\(lan.host):\(lan.port)") {
+            transports.append(.direct(baseURL: url))
+        }
+        if let relay = payload.relay, let url = URL(string: relay) {
+            transports.append(.relay(relayURL: url, roomId: payload.macDeviceId))
+        }
+        guard !transports.isEmpty else {
+            throw PairingFlowError(message: "二维码里没有可连接的地址，在 Mac 上重新生成一个")
+        }
+
+        var failure = "无法连接到这台 Mac"
+        for transport in transports {
+            let connection = SecureBridgeConnection(
+                endpoint: SecureBridgeEndpoint(
+                    transport: transport,
+                    phoneDeviceId: phone.deviceId,
+                    phoneIdentity: phone.identity,
+                    pairing: payload
+                )
+            )
+            do {
+                try await connection.connectCapped(seconds: 15)
+            } catch {
+                failure = humanizeSecureError(describe(error))
+                await connection.disconnect()
+                continue
+            }
+            guard let trusted = connection.currentTrustedMac else {
+                await connection.disconnect()
+                failure = "握手完成但没拿到 Mac 身份，重试一次"
+                continue
+            }
+            // 配对握手只为换信任记录，正式通道走 trusted_reconnect 重建
+            await connection.disconnect()
+
+            let config = hosts.addPaired(
+                macDeviceId: trusted.macDeviceId,
+                macIdentityPublicKey: trusted.macIdentityPublicKey,
+                name: trusted.displayName,
+                lanHost: payload.lan?.host,
+                lanPort: payload.lan?.port,
+                relay: payload.relay
+            )
+            await disconnect()
+            hosts.setActive(config.id)
+            await connect()
+            return
+        }
+        throw PairingFlowError(message: failure)
+    }
+
+    // MARK: - 推送注册
+
+    /// APNs 注册回调送来的 device token（hex）。到达即尝试上报。
+    func updatePushToken(_ hex: String) {
+        guard hex != apnsTokenHex else { return }
+        apnsTokenHex = hex
+        Task { await self.sendPushRegistration() }
+    }
+
+    /// 幂等重发：token 到达、开关变化、连接（重）建立都整体发一次。
+    /// manual 主机没有 registerPush 通道（secureConnection 为 nil），静默跳过。
+    private func sendPushRegistration() async {
+        guard let secureConnection, isConnected, let apnsTokenHex else { return }
+        #if DEBUG
+            let environment = "development"
+        #else
+            let environment = "production"
+        #endif
+        try? await secureConnection.registerPush(
+            deviceToken: apnsTokenHex,
+            environment: environment,
+            alertsEnabled: PushAlertsEnabled(
+                approvals: notifyOnApproval, turns: notifyOnTurnCompleted
+            )
+        )
+    }
+
+    // MARK: - 通知深链
+
+    func routeToSession(_ sessionID: String) {
+        pendingSessionRoute = sessionID
+    }
+
+    func clearSessionRoute() {
+        pendingSessionRoute = nil
     }
 
     // MARK: - 会话
@@ -253,11 +424,15 @@ final class CrewViewModel {
     func setNotifyOnApproval(_ enabled: Bool) {
         notifyOnApproval = enabled
         UserDefaults.standard.set(enabled, forKey: PrefKeys.notifyApproval)
+        if enabled { PushCoordinator.shared.enableNotifications() }
+        Task { await self.sendPushRegistration() }
     }
 
     func setNotifyOnTurnCompleted(_ enabled: Bool) {
         notifyOnTurnCompleted = enabled
         UserDefaults.standard.set(enabled, forKey: PrefKeys.notifyTurnCompleted)
+        if enabled { PushCoordinator.shared.enableNotifications() }
+        Task { await self.sendPushRegistration() }
     }
 
     // MARK: - 内部
@@ -371,5 +546,46 @@ final class CrewViewModel {
         static let autoPresentApprovals = "glasses.autoPresentApprovals"
         static let notifyApproval = "notify.approvalPush"
         static let notifyTurnCompleted = "notify.turnCompletedPush"
+    }
+}
+
+/// 配对流程的用户可读失败；PairingScanView 直接展示 message
+struct PairingFlowError: Error {
+    let message: String
+}
+
+/// 安全通道的失败翻成能行动的人话。SecureBridgeConnection 只给 transport 字符串
+/// （错误码嵌在文案里），所以靠码名匹配；没认出来的原样透传。
+func humanizeSecureError(_ raw: String) -> String {
+    if raw.contains("pairing_expired") {
+        return "二维码已过期，在 Mac 上运行 lenscrew qr 重新生成"
+    }
+    if raw.contains("phone_identity_changed") {
+        return "Mac 记录的手机身份对不上，在 Mac 上移除这台手机后重新扫码"
+    }
+    if raw.contains("phone_not_trusted") {
+        return "Mac 还不信任这台手机，重新扫码配对"
+    }
+    if raw.contains("invalid_signature") {
+        return "身份校验失败，在 Mac 上重新生成二维码再试"
+    }
+    if raw.contains("protocol_mismatch") {
+        return "App 与 Mac 端协议版本不一致，两边都升级后重试"
+    }
+    return raw
+}
+
+extension SecureBridgeConnection {
+    /// connect() 自身不设上限：LAN 地址在蜂窝网/换网后可能要陪系统 TCP 超时耗完，
+    /// 盖个盖子让 relay 兜底及时接手。超时用 disconnect() 掐断挂着的握手，
+    /// connect() 随之抛出。（15s 边界上握手刚好完成时有微小的误杀窗口，可重连恢复。）
+    func connectCapped(seconds: Double) async throws {
+        let watchdog = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(seconds))
+            guard !Task.isCancelled else { return }
+            await self?.disconnect()
+        }
+        defer { watchdog.cancel() }
+        try await connect()
     }
 }

@@ -2,9 +2,14 @@ import SwiftUI
 
 @main
 struct LensCrewApp: App {
+    /// APNs 注册回调只走 UIKit delegate，SwiftUI 生命周期在这里开口
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+    /// model 提到 App 级：通知管线（PushCoordinator）要在根视图之外够得着它
+    @State private var model = CrewViewModel()
+
     var body: some Scene {
         WindowGroup {
-            RootView()
+            RootView(model: model)
         }
     }
 }
@@ -17,7 +22,7 @@ enum RootTab {
 /// 不用系统 TabView 是因为 mockup 的 dock 右侧有独立的圆形 + 按钮，
 /// 系统 tab bar 塞不进这种布局。
 struct RootView: View {
-    @State private var model = CrewViewModel()
+    let model: CrewViewModel
     @State private var tab: RootTab = .sessions
     /// 会话导航栈：元素是 sessionID
     @State private var sessionPath: [String] = []
@@ -52,11 +57,26 @@ struct RootView: View {
         .preferredColorScheme(.dark)
         .tint(LC.blue)
         .task {
+            // 通知管线先接上：冷启动攒下的深链与 token 都靠 attach 冲账
+            PushCoordinator.shared.attach(model)
+            applyPendingRoute()
             // 启动即连 active 主机；没配置过就等用户去设置页添加
             if model.hosts.active != nil {
                 await model.connect()
             }
         }
+        .onChange(of: model.pendingSessionRoute) { _, route in
+            guard route != nil else { return }
+            applyPendingRoute()
+        }
+    }
+
+    /// 通知深链的落地：切到会话 tab 并把目标会话推上导航栈
+    private func applyPendingRoute() {
+        guard let route = model.pendingSessionRoute else { return }
+        tab = .sessions
+        sessionPath = [route]
+        model.clearSessionRoute()
     }
 }
 

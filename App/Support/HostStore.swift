@@ -1,9 +1,13 @@
+import BridgeLink
 import Foundation
 import Security
 import SwiftUI
 
-/// 一台 Mac 的 bridge 连接配置。
-/// 口令不在这里——它是能驱动那台 Mac 上 agent 的凭据，只进 Keychain（按主机各存一条）。
+/// 一台 Mac 的 bridge 连接配置，两种形态共用一个结构：
+/// - manual：host/port + 口令（口令是能驱动那台 Mac 上 agent 的凭据，只进 Keychain）；
+/// - paired：扫码配对来的，macDeviceId 非空即是。mac 身份公钥（trusted_reconnect 的
+///   信任根）也只进 Keychain（account "mac-identity-<id>"），这里只留可公开的地址簿。
+/// 配对字段全部可选，旧版 JSON（只有前五个字段）解码出来自然是 manual 形态。
 struct BridgeHostConfig: Identifiable, Codable, Equatable {
     var id: UUID
     var name: String
@@ -11,12 +15,79 @@ struct BridgeHostConfig: Identifiable, Codable, Equatable {
     var port: Int
     /// 最近一次成功连上的时刻，设置页「上次连接 …」用
     var lastConnectedAt: Date?
+    /// 非空 = paired 形态，也是 relay 的 roomId
+    var macDeviceId: String?
+    var lanHost: String?
+    var lanPort: Int?
+    /// relay 服务的 https 地址（原样存二维码里的字符串）
+    var relay: String?
+
+    var isPaired: Bool { macDeviceId != nil }
 
     var baseURL: URL? {
         URL(string: "http://\(host):\(port)")
     }
 
+    var lanBaseURL: URL? {
+        guard let lanHost, let lanPort, !lanHost.isEmpty, lanPort > 0 else { return nil }
+        return URL(string: "http://\(lanHost):\(lanPort)")
+    }
+
+    var relayURL: URL? {
+        relay.flatMap(URL.init(string:))
+    }
+
     static let defaultPort = 4311
+}
+
+/// 已配对主机实际走的链路，设置页主机行 / Home 主机 chip 的副行展示用
+enum HostLinkPath: Sendable, Equatable {
+    case direct, relay
+
+    var label: String {
+        switch self {
+        case .direct: return "直连"
+        case .relay: return "中继"
+        }
+    }
+}
+
+extension BridgeHostConfig {
+    /// paired 主机的候选 E2EE 端点：LAN 直连优先，relay 兜底；manual 主机返回空。
+    /// mac 公钥由调用方从 Keychain 取出传入，这里不碰存储。
+    func pairedEndpoints(
+        macIdentityPublicKey: String
+    ) -> [(endpoint: SecureBridgeEndpoint, path: HostLinkPath)] {
+        guard let macDeviceId else { return [] }
+        let trusted = TrustedMac(
+            macDeviceId: macDeviceId,
+            macIdentityPublicKey: macIdentityPublicKey,
+            displayName: name
+        )
+        let phone = PhonePairingIdentity.shared
+        var result: [(SecureBridgeEndpoint, HostLinkPath)] = []
+        if let lanBaseURL {
+            result.append((
+                SecureBridgeEndpoint(
+                    transport: .direct(baseURL: lanBaseURL),
+                    phoneDeviceId: phone.deviceId,
+                    phoneIdentity: phone.identity,
+                    trustedMac: trusted
+                ), .direct
+            ))
+        }
+        if let relayURL {
+            result.append((
+                SecureBridgeEndpoint(
+                    transport: .relay(relayURL: relayURL, roomId: macDeviceId),
+                    phoneDeviceId: phone.deviceId,
+                    phoneIdentity: phone.identity,
+                    trustedMac: trusted
+                ), .relay
+            ))
+        }
+        return result
+    }
 }
 
 /// 多主机配置仓：每台 Mac 跑自己的 bridge，这里管配置、口令与 active 切换。
@@ -95,11 +166,53 @@ final class HostStore {
         return config
     }
 
+    /// 扫码配对成功后入库。同一台 Mac 重复扫码不追加新行：原地刷新名称、地址与公钥，
+    /// 避免设置页出现两行指向同一台机器、各持一份信任记录。
+    @discardableResult
+    func addPaired(
+        macDeviceId: String, macIdentityPublicKey: String, name: String,
+        lanHost: String?, lanPort: Int?, relay: String?
+    ) -> BridgeHostConfig {
+        if let index = hosts.firstIndex(where: { $0.macDeviceId == macDeviceId }) {
+            hosts[index].name = name
+            hosts[index].lanHost = lanHost
+            hosts[index].lanPort = lanPort
+            hosts[index].relay = relay
+            HostKeychain.write(
+                macIdentityPublicKey, account: Self.macIdentityAccount(hosts[index].id)
+            )
+            persist()
+            return hosts[index]
+        }
+        var config = BridgeHostConfig(
+            id: UUID(), name: name, host: "", port: 0, lastConnectedAt: nil
+        )
+        config.macDeviceId = macDeviceId
+        config.lanHost = lanHost
+        config.lanPort = lanPort
+        config.relay = relay
+        hosts.append(config)
+        HostKeychain.write(macIdentityPublicKey, account: Self.macIdentityAccount(config.id))
+        if activeHostID == nil { activeHostID = config.id }
+        persist()
+        return config
+    }
+
+    /// paired 主机的 mac 身份公钥（trusted_reconnect 的信任根）
+    func macIdentityPublicKey(for id: UUID) -> String? {
+        HostKeychain.read(account: Self.macIdentityAccount(id))
+    }
+
     func remove(_ id: UUID) {
         hosts.removeAll { $0.id == id }
         HostKeychain.delete(account: id.uuidString)
+        HostKeychain.delete(account: Self.macIdentityAccount(id))
         if activeHostID == id { activeHostID = hosts.first?.id }
         persist()
+    }
+
+    private static func macIdentityAccount(_ id: UUID) -> String {
+        "mac-identity-\(id.uuidString)"
     }
 
     func setActive(_ id: UUID) {
@@ -157,6 +270,41 @@ final class HostStore {
         static let roots = "bridge.workspaceRoots"
         static let legacyHost = "bridge.host"
         static let legacyPort = "bridge.port"
+    }
+}
+
+/// 手机侧配对身份：Ed25519 种子 + 稳定设备 id，首次用到时生成后进 Keychain
+/// （仅本机、解锁可读），此后重装前不再变化——mac 端的信任表按它们记账，
+/// 每次都换的话 trusted_reconnect 永远对不上。全 App 经 shared 取，单例语义。
+struct PhonePairingIdentity: Sendable {
+    static let shared = PhonePairingIdentity()
+
+    let identity: PhoneIdentity
+    let deviceId: String
+
+    private init() {
+        if let seedBase64 = HostKeychain.read(account: Accounts.seed),
+           let restored = try? PhoneIdentity(seedBase64: seedBase64) {
+            identity = restored
+        } else {
+            // 首次使用或 Keychain 记录损坏：重新生成（后者会让 mac 端信任失效，
+            // 表现为 phone_identity_changed，用户重新扫码即可恢复）
+            let fresh = PhoneIdentity()
+            HostKeychain.write(fresh.seedBase64, account: Accounts.seed)
+            identity = fresh
+        }
+        if let stored = HostKeychain.read(account: Accounts.deviceId), !stored.isEmpty {
+            deviceId = stored
+        } else {
+            let fresh = UUID().uuidString
+            HostKeychain.write(fresh, account: Accounts.deviceId)
+            deviceId = fresh
+        }
+    }
+
+    private enum Accounts {
+        static let seed = "phone-identity-seed"
+        static let deviceId = "phone-device-id"
     }
 }
 

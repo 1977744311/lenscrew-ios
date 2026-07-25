@@ -108,6 +108,7 @@ struct SettingsScreen: View {
             case .connected:
                 var parts = ["在线"]
                 if let ms = model.latencyMs { parts.append("\(ms)ms") }
+                if let path = model.linkPath { parts.append(path.label) }
                 parts.append("\(model.sessions.count) 个会话")
                 return parts.joined(separator: " · ")
             case .connecting:
@@ -138,25 +139,34 @@ struct SettingsScreen: View {
                 }
             }
             .buttonStyle(.plain)
-            .disabled(model.hosts.active == nil)
+            // paired 主机没有口令概念，凭 Keychain 里的身份密钥重连
+            .disabled(model.hosts.active == nil || model.hosts.active?.isPaired == true)
 
             SetRow(
                 icon: "checkmark.shield.fill", tint: LC.green,
                 title: "端到端加密",
-                detail: "二维码配对 + E2EE 通道"
+                detail: pairedCount > 0
+                    ? "已配对 \(pairedCount) 台 · X25519+AES-GCM"
+                    : "二维码配对 + E2EE 通道"
             ) {
-                Text("开发中")
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(LC.lightBlue)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 3)
-                    .background(LC.blue.opacity(0.14), in: Capsule())
+                if pairedCount == 0 {
+                    Text("开发中")
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(LC.lightBlue)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 3)
+                        .background(LC.blue.opacity(0.14), in: Capsule())
+                }
             }
         } header: {
             sectionHeader("安全")
         }
         .listRowBackground(LC.elev)
         .listRowSeparatorTint(LC.line)
+    }
+
+    private var pairedCount: Int {
+        model.hosts.hosts.filter(\.isPaired).count
     }
 
     // MARK: - 通知
@@ -273,10 +283,11 @@ private struct SetRow<Right: View>: View {
     }
 }
 
-/// 添加电脑：手动填配置即可用；扫码配对是后续任务的接线点（按钮位已留）。
+/// 添加电脑：扫码配对（E2EE）或手动填配置（明文 HTTP + 口令）。
 private struct AddComputerSheet: View {
     let model: CrewViewModel
     @Environment(\.dismiss) private var dismiss
+    @State private var showScanner = false
     @State private var name = ""
     @State private var host = ""
     @State private var portText = "\(BridgeHostConfig.defaultPort)"
@@ -303,24 +314,18 @@ private struct AddComputerSheet: View {
                     .foregroundStyle(LC.text3)
             }
 
-            // 扫码配对按钮位：等二维码配对 + E2EE 落地后接线
-            Button {} label: {
+            Button {
+                showScanner = true
+            } label: {
                 HStack(spacing: 8) {
                     Image(systemName: "qrcode.viewfinder").font(.system(size: 16))
                     Text("扫码配对").font(.system(size: 15, weight: .semibold))
-                    Text("即将支持")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(LC.lightBlue)
-                        .padding(.horizontal, 7)
-                        .padding(.vertical, 2)
-                        .background(LC.blue.opacity(0.14), in: Capsule())
                 }
-                .foregroundStyle(LC.text2)
+                .foregroundStyle(LC.lightBlue)
                 .frame(maxWidth: .infinity, minHeight: 46)
-                .background(LC.elev, in: RoundedRectangle(cornerRadius: 14))
+                .background(LC.blue.opacity(0.14), in: RoundedRectangle(cornerRadius: 14))
             }
             .buttonStyle(.plain)
-            .disabled(true)
 
             VStack(spacing: 0) {
                 field("名称", text: $name, placeholder: "书房的 Mac mini")
@@ -374,6 +379,13 @@ private struct AddComputerSheet: View {
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
         .presentationBackground(Color(hex: 0x161618))
+        .fullScreenCover(isPresented: $showScanner) {
+            PairingScanView(model: model) {
+                // 配对成功：收掉扫码页和本 sheet，回设置页看新主机行
+                showScanner = false
+                dismiss()
+            }
+        }
     }
 
     private func field(

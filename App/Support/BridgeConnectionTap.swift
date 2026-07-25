@@ -8,7 +8,7 @@ import Foundation
 /// 而 AsyncStream 只允许单消费者——直接让 VM 和 coordinator 抢同一条流，
 /// 事件会被随机瓜分。App 层包一层就能拿到用量做轮次分隔线，不用改库层契约。
 final class BridgeConnectionTap: BridgeConnecting, @unchecked Sendable {
-    private let base: HTTPBridgeConnection
+    private let base: any BridgeConnecting
     /// 协调层消费的主流
     let events: AsyncStream<BridgeEvent>
     /// UI 消费的旁路副本
@@ -16,7 +16,7 @@ final class BridgeConnectionTap: BridgeConnecting, @unchecked Sendable {
     var linkStates: AsyncStream<BridgeLinkState> { base.linkStates }
     private let pump: Task<Void, Never>
 
-    init(wrapping base: HTTPBridgeConnection) {
+    init(wrapping base: any BridgeConnecting) {
         self.base = base
 
         var capturedMain: AsyncStream<BridgeEvent>.Continuation!

@@ -90,8 +90,10 @@ struct HomeScreen: View {
         guard let host = model.hosts.active else { return "未配置电脑" }
         switch model.linkState {
         case .connected:
-            if let ms = model.latencyMs { return "\(host.name) · \(ms)ms" }
-            return host.name
+            var parts = [host.name]
+            if let ms = model.latencyMs { parts.append("\(ms)ms") }
+            if let path = model.linkPath { parts.append(path.label) }
+            return parts.joined(separator: " · ")
         case .connecting:
             return "\(host.name) · 连接中"
         case .disconnected, .failed:
