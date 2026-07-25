@@ -59,6 +59,8 @@ struct RootView: View {
         .task {
             // 通知管线先接上：冷启动攒下的深链与 token 都靠 attach 冲账
             PushCoordinator.shared.attach(model)
+            // 手表中转：把聚合审批/会话推上腕、接回裁决（手表不直连 bridge）
+            WatchBridge.shared.attach(model)
             applyPendingRoute()
             // 启动即连全部已配置主机；没配置过就等用户去设置页添加
             if model.hosts.active != nil {

@@ -6,7 +6,8 @@ import PackageDescription
 
 let package = Package(
     name: "LensCrewKit",
-    platforms: [.iOS(.v17), .macOS(.v14)],
+    // watchOS 只消费 AgentProtocol（Foundation-only）；手表 target 不引 BridgeLink 等网络/SDK 层
+    platforms: [.iOS(.v17), .macOS(.v14), .watchOS(.v10)],
     products: [
         .library(name: "AgentProtocol", targets: ["AgentProtocol"]),
         .library(name: "BridgeLink", targets: ["BridgeLink"]),

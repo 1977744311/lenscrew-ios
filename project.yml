@@ -3,8 +3,12 @@
 name: LensCrew
 options:
   bundleIdPrefix: dev.steven
+  # iOS 与 watch target 共源 Watch/Shared/WatchProto.swift，
+  # 逐级建组才能让两个 target 引用同一份 group/file reference
+  createIntermediateGroups: true
   deploymentTarget:
     iOS: "17.0"
+    watchOS: "10.0"
 packages:
   LensCrewKit:
     path: .
@@ -17,6 +21,8 @@ targets:
     platform: iOS
     sources:
       - App
+      # Watch ↔ iPhone 的 WC 载荷契约与手表 target 共源（只挂这一个文件）
+      - path: Watch/Shared/WatchProto.swift
     dependencies:
       - package: LensCrewKit
         products:
@@ -30,6 +36,9 @@ targets:
           - MWDATCore
           - MWDATDisplay
           - MWDATMockDevice
+      # 手表 app 随 iOS app 分发（Embed Watch Content）
+      - target: LensCrewWatch
+        embed: true
     # APNs：审批/轮次推送。真机收推送还需要开发者账号签名，构建本身不依赖
     entitlements:
       path: App/Support/LensCrew.entitlements
@@ -54,3 +63,60 @@ targets:
         SWIFT_VERSION: "6.0"
         TARGETED_DEVICE_FAMILY: "1"
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+
+  # 腕上审批器 + 一瞥（现代单 target 手表 app）。只依赖 AgentProtocol：
+  # 手表不引 BridgeLink/SDK 层，不做加密不连网，一切经 iPhone 的 WatchBridge 中转。
+  LensCrewWatch:
+    type: application
+    platform: watchOS
+    sources:
+      - Watch
+    dependencies:
+      - package: LensCrewKit
+        products:
+          - AgentProtocol
+      - target: LensCrewWatchWidget
+        embed: true
+    info:
+      path: Watch/Support/Info.plist
+      properties:
+        WKApplication: true
+        WKCompanionAppBundleIdentifier: dev.steven.LensCrew
+    # app group 只为给 Smart Stack 小组件递一瞥数据；真机生效需要开发者账号签名
+    entitlements:
+      path: Watch/Support/LensCrewWatch.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.dev.steven.LensCrew
+    settings:
+      base:
+        SWIFT_VERSION: "6.0"
+        TARGETED_DEVICE_FAMILY: "4"
+        # 手表 app 的 bundle id 必须挂在宿主 iOS app 之下
+        PRODUCT_BUNDLE_IDENTIFIER: dev.steven.LensCrew.watchkitapp
+
+  # W4 · Smart Stack 小组件（WidgetKit / accessoryRectangular）。
+  # 不依赖 AgentProtocol：数据经 WatchGlanceStore（app group defaults）交接。
+  LensCrewWatchWidget:
+    type: extensionkit-extension
+    platform: watchOS
+    sources:
+      - WatchWidget
+      - path: Watch/Shared/WatchGlanceStore.swift
+    info:
+      path: WatchWidget/Info.plist
+      properties:
+        CFBundleDisplayName: LensCrew
+        EXAppExtensionAttributes:
+          EXExtensionPointIdentifier: com.apple.widgetkit-extension
+    entitlements:
+      path: WatchWidget/LensCrewWatchWidget.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.dev.steven.LensCrew
+    settings:
+      base:
+        SWIFT_VERSION: "6.0"
+        TARGETED_DEVICE_FAMILY: "4"
+        # widget 的 bundle id 必须挂在手表 app 之下
+        PRODUCT_BUNDLE_IDENTIFIER: dev.steven.LensCrew.watchkitapp.widget
