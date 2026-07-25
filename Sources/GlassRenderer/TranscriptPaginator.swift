@@ -32,9 +32,10 @@ public enum TranscriptPaginator {
 
     /// 裸文本分页。审批的 detail 是一段自由文本（命令原文、diff 摘要），
     /// 不属于任何流水块，但同样可能长到一屏放不下。
+    /// 默认档取 body：mockup 审批卡上的命令是绿色 body，不是小字 meta。
     public static func textPages(
         _ text: String,
-        style: GlassTextStyle = .meta,
+        style: GlassTextStyle = .body,
         budget: GlassLayoutBudget = .default
     ) -> [GlassPage] {
         let lines = GlassText.wrap(text, width: budget.chars(for: style))
@@ -91,7 +92,7 @@ public enum TranscriptPaginator {
     ) -> [GlassLine] {
         switch block {
         case let .userMessage(_, text, imageCount):
-            var lines = [GlassLine("› 你", style: .meta, color: .secondary)]
+            var lines = [GlassLine("你", style: .meta, color: .secondary)]
             lines += wrapped(text, style: .body, budget: budget)
             if imageCount > 0 {
                 lines.append(
@@ -116,17 +117,18 @@ public enum TranscriptPaginator {
 
         case let .shellCommand(id, command, _, output, exitCode, status):
             let action = GlassAction.openBlock(id).actionID
+            // mockup 把 shell 收成一行绿色 body「$ ls -la · 完成 0」：
+            // 命令与结果同行；DAT 没有等宽字体，mono 语义靠 $ 前缀
+            // 与紧凑退出码的文案格式贴近。
+            let suffix = " · " + shellCompactStatus(status: status, exitCode: exitCode)
             var lines = [
                 GlassLine(
                     "$ " + GlassText.truncate(
-                        firstLine(command), to: budget.headingChars - 2
-                    ),
-                    style: .heading, actionID: action
-                ),
-                GlassLine(
-                    shellStatusText(status: status, exitCode: exitCode),
-                    style: .meta, color: .secondary, actionID: action
-                ),
+                        firstLine(command),
+                        to: budget.bodyChars - GlassText.width("$ ") - GlassText.width(suffix)
+                    ) + suffix,
+                    style: .body, color: .secondary, actionID: action
+                )
             ]
             lines += tail(of: output, limit: outputTailLines, budget: budget)
                 .map { GlassLine($0, style: .meta, color: .secondary, actionID: action) }
@@ -134,10 +136,24 @@ public enum TranscriptPaginator {
 
         case let .fileChange(id, files, status):
             let action = GlassAction.openBlock(id).actionID
+            // mockup 把单文件改动收成一行白色 body「hello.txt +1 −0 · 已应用」；
+            // 多文件退化为同格式的汇总行 + 文件明细。
+            if files.count == 1, let file = files.first {
+                let suffix = diffStat(file) + " · " + fileStatusText(status)
+                return [
+                    GlassLine(
+                        GlassText.truncate(
+                            lastComponent(file.path),
+                            to: budget.bodyChars - GlassText.width(suffix)
+                        ) + suffix,
+                        style: .body, actionID: action
+                    )
+                ]
+            }
             var lines = [
                 GlassLine(
-                    "改动 \(files.count) 个文件 · \(statusText(status))",
-                    style: .heading, actionID: action
+                    "改动 \(files.count) 个文件 · \(fileStatusText(status))",
+                    style: .body, actionID: action
                 )
             ]
             for file in files.prefix(3) {
@@ -203,23 +219,23 @@ public enum TranscriptPaginator {
     ) -> [GlassLine] {
         switch block {
         case let .shellCommand(_, command, cwd, output, exitCode, status):
-            var lines = wrapped(command, style: .heading, budget: budget)
-            if let cwd {
-                lines.append(GlassLine(cwd, style: .meta, color: .secondary))
-            }
+            // mockup 块详情的头：「$ 命令」heading + 「完成 · 退出码 0」meta。
+            // 输出行升为白色 body——它是这一屏的正文主角，不再当次要信息压灰。
+            var lines = wrapped("$ " + command, style: .heading, budget: budget)
             lines.append(
                 GlassLine(
                     shellStatusText(status: status, exitCode: exitCode),
                     style: .meta, color: .secondary
                 )
             )
-            lines += wrapped(output, style: .meta, budget: budget).map {
-                GlassLine($0.text, style: .meta, color: .secondary)
+            if let cwd {
+                lines.append(GlassLine(cwd, style: .meta, color: .secondary))
             }
+            lines += wrapped(output, style: .body, budget: budget)
             return lines
 
         case let .fileChange(_, files, status):
-            var lines = [GlassLine("改动 · \(statusText(status))", style: .heading)]
+            var lines = [GlassLine("改动 · \(fileStatusText(status))", style: .heading)]
             for file in files {
                 lines.append(GlassLine(file.path, style: .meta, color: .secondary))
                 let stat = diffStat(file)
@@ -308,6 +324,23 @@ public enum TranscriptPaginator {
     private static func shellStatusText(status: BlockStatus, exitCode: Int?) -> String {
         guard let exitCode else { return statusText(status) }
         return "\(statusText(status)) · 退出码 \(exitCode)"
+    }
+
+    /// 流水页的紧凑形态「完成 0」；块详情才用全称「完成 · 退出码 0」——
+    /// 摘要行还要塞下命令本身，字面越短留给命令的宽度越多。
+    private static func shellCompactStatus(status: BlockStatus, exitCode: Int?) -> String {
+        guard let exitCode else { return statusText(status) }
+        return "\(statusText(status)) \(exitCode)"
+    }
+
+    /// 文件改动的状态词面向"落没落盘"：ok=已应用、pending=待应用（mockup 用词），
+    /// 其余档沿用通用状态词。
+    private static func fileStatusText(_ status: BlockStatus) -> String {
+        switch status {
+        case .ok: return "已应用"
+        case .pending: return "待应用"
+        default: return statusText(status)
+        }
     }
 
     private static func planMarker(_ status: PlanStep.Status) -> String {

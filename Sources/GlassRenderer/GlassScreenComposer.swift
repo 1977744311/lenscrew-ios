@@ -26,8 +26,9 @@ public struct GlassSessionSummary: Sendable, Equatable {
 /// 因而可以对 canonicalJSON 做快照测试，不需要眼镜。
 public enum GlassScreenComposer {
 
-    /// 审批卡要给选项按钮腾地方，正文预算比普通页少
-    public static let approvalDetailLines = 5
+    /// 审批卡要给工作目录/会话行与两行裁决按钮腾地方，正文预算比普通页少。
+    /// mockup 的正文本来就只有三段：命令、工作目录、会话·agent。
+    public static let approvalDetailLines = 3
 
     public static func sessionList(
         _ sessions: [GlassSessionSummary], budget: GlassLayoutBudget = .default
@@ -50,9 +51,12 @@ public enum GlassScreenComposer {
                         actionID: GlassAction.openSession(session.id).actionID
                     ),
                     children: [
+                        // mockup 的行标题是 30px，落在 heading(36) 与 body(26) 之间。
+                        // 屏顶「会话」已占用 heading 档，行标题取 body 档
+                        // 才保得住"页题 > 行题 > meta"的三级层次。
                         .text(
-                            GlassText.truncate(session.title, to: budget.headingChars),
-                            style: .heading, color: .primary
+                            GlassText.truncate(session.title, to: budget.bodyChars),
+                            style: .body, color: .primary
                         ),
                         .text(
                             "\(agentLabel(session.agent)) · \(badge)",
@@ -70,7 +74,10 @@ public enum GlassScreenComposer {
         return screen(
             header: .text("会话", style: .heading, color: .primary),
             content: rows,
-            footer: nil
+            // mockup 底部的白色操作提示；空列表连"点按进入"都无从谈起，不放脚注
+            footer: sessions.isEmpty
+                ? nil
+                : .text("点按会话进入 · 共 \(sessions.count) 个", style: .meta, color: .primary)
         )
     }
 
@@ -112,7 +119,7 @@ public enum GlassScreenComposer {
         let clamped = clamp(index, count: pages.count)
         return screen(
             header: .text(
-                GlassText.truncate(title, to: budget.headingChars),
+                GlassText.truncate(detailTitle(title), to: budget.headingChars),
                 style: .heading, color: .primary
             ),
             content: nodes(for: pages[safe: clamped]?.lines ?? []),
@@ -120,37 +127,78 @@ public enum GlassScreenComposer {
         )
     }
 
+    /// 调用方（GlassScreenRenderer）传进来的 title 是 block.kind 的英文标识，
+    /// 直接上屏会露出 "shellCommand" 这类代码词。已知标识翻译成中文类别词；
+    /// mockup 里"命令 + 状态"那两行头由 detailPages 的首行承担，这里只是类别锚点。
+    private static func detailTitle(_ raw: String) -> String {
+        switch raw {
+        case "shellCommand": return "Shell 命令"
+        case "fileChange": return "文件改动"
+        case "toolCall": return "工具调用"
+        case "plan": return "计划"
+        case "error": return "错误"
+        case "userMessage", "agentMessage": return "消息"
+        case "reasoning": return "思考"
+        default: return raw
+        }
+    }
+
     /// 审批卡。会打断当前浏览：agent 卡在这里等人，别的都不重要了。
     /// 选项按钮由 adapter 决定（codex 有 approved_for_session，acp 由 agent 动态给），
     /// 所以这里不硬编码「批准/拒绝」两个按钮。
+    ///
+    /// `sessionTitle` / `agent` 是 mockup 里「lenscrew-demo · Codex」那行上下文；
+    /// ApprovalRequest 本身不带会话信息，由调用方另给，缺省不渲染该行。
     public static func approvalCard(
         _ approval: ApprovalRequest,
         detailPages: [GlassPage],
         index: Int,
+        sessionTitle: String? = nil,
+        agent: AgentKind? = nil,
         budget: GlassLayoutBudget = .default
     ) -> GlassNode {
         let clamped = clamp(index, count: detailPages.count)
         var content = nodes(for: detailPages[safe: clamped]?.lines ?? [])
-        if detailPages.count > 1 {
+        // mockup 的正文三段：命令（绿 body，来自 detailPages）→ 工作目录（白 body）
+        // → 会话·agent（meta）。后两段是上下文锚点，每一页都带着，
+        // 翻页时不丢"正在批谁家的什么"。
+        if let cwd = approval.cwd {
             content.append(
-                .text("\(clamped + 1)/\(detailPages.count)", style: .meta, color: .secondary)
+                .text(
+                    GlassText.truncate("工作目录 \(cwd)", to: budget.bodyChars),
+                    style: .body, color: .primary
+                )
             )
         }
-        let buttons: [GlassNode] = approval.options.map { option in
-            .button(
-                label: buttonLabel(kind: option.kind, scope: option.scope),
-                style: buttonStyle(option.kind, option.scope),
-                actionID: GlassAction.resolveApproval(optionID: option.id).actionID
+        let context = [sessionTitle, agent.map(agentLabel)].compactMap { $0 }
+        if !context.isEmpty {
+            content.append(
+                .text(
+                    GlassText.truncate(
+                        context.joined(separator: " · "), to: budget.metaChars
+                    ),
+                    style: .meta, color: .secondary
+                )
             )
         }
-        var footer: [GlassNode] = buttons
+        // 按影响面分两行：allow+once（primary）独占全宽首行，其余选项并排次行。
+        // 层级沿用 buttonStyle 的既有弱化策略；集合本身仍完全由 approval.options
+        // 驱动——没有的档位不凭空造按钮，多页时翻页钮单独成行不与裁决混排。
+        let primaries = approval.options.filter { buttonStyle($0.kind, $0.scope) == .primary }
+        let others = approval.options.filter { buttonStyle($0.kind, $0.scope) != .primary }
+        var footerRows: [GlassNode] = []
         if detailPages.count > 1 {
-            footer.insert(
-                .button(label: "←", style: .outline, actionID: GlassAction.pagePrevious.actionID),
-                at: 0
+            footerRows.append(
+                pageFooter(index: clamped, count: detailPages.count, showLatest: false)
             )
-            footer.append(
-                .button(label: "→", style: .outline, actionID: GlassAction.pageNext.actionID)
+        }
+        footerRows += primaries.map(approvalButton(for:))
+        if !others.isEmpty {
+            footerRows.append(
+                .flexBox(
+                    FlexBoxProps(direction: .row, gap: 6, alignment: .center),
+                    children: others.map(approvalButton(for:))
+                )
             )
         }
         return screen(
@@ -165,10 +213,21 @@ public enum GlassScreenComposer {
                 ]
             ),
             content: content,
-            footer: .flexBox(
-                FlexBoxProps(direction: .row, gap: 6, alignment: .center),
-                children: footer
-            )
+            footer: footerRows.isEmpty
+                ? nil
+                : .flexBox(
+                    // crossAlignment 拉伸让首行的 primary 按钮占满整宽（mockup 的全宽「批准」）
+                    FlexBoxProps(direction: .column, gap: 6, crossAlignment: .stretch),
+                    children: footerRows
+                )
+        )
+    }
+
+    private static func approvalButton(for option: ApprovalOption) -> GlassNode {
+        .button(
+            label: buttonLabel(kind: option.kind, scope: option.scope),
+            style: buttonStyle(option.kind, option.scope),
+            actionID: GlassAction.resolveApproval(optionID: option.id).actionID
         )
     }
 
@@ -261,7 +320,8 @@ public enum GlassScreenComposer {
 
     private static func statusText(_ status: SessionStatus) -> String {
         switch status {
-        case .starting: return "启动中"
+        // mockup 的状态词表把"会话已建、还没跑起来"这一档叫「计划中」
+        case .starting: return "计划中"
         case .idle: return "空闲"
         case .running: return "运行中"
         case .awaitingApproval: return "待审批"

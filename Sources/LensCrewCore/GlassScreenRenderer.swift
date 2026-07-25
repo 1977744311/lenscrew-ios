@@ -76,7 +76,11 @@ public enum GlassScreenRenderer {
             let pages = TranscriptPaginator.textPages(approval.detail, budget: cardBudget)
             return GlassRenderResult(
                 node: GlassScreenComposer.approvalCard(
-                    approval, detailPages: pages, index: page, budget: budget
+                    approval, detailPages: pages, index: page,
+                    // 会话与 agent 是审批的上下文锚点：眼镜上批的是"谁家的什么"
+                    sessionTitle: state.session.title,
+                    agent: state.session.agent,
+                    budget: budget
                 ),
                 pageCount: pages.count
             )

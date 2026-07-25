@@ -124,4 +124,117 @@ struct TranscriptPaginatorTests {
         #expect(pages.count == 1)
         #expect(pages[0].lines.isEmpty)
     }
+
+    // MARK: - mockup 对照（G2 流水页的块摘要文案）
+
+    @Test("shell 块在流水页收成一行绿色 body「$ cmd · 完成 0」")
+    func shellSummaryIsSingleGreenBodyLine() throws {
+        let done = TranscriptPaginator.paginate(
+            blocks: [
+                .shellCommand(
+                    id: "s", command: "ls -la", cwd: nil, output: "",
+                    exitCode: 0, status: .ok
+                )
+            ],
+            agent: .codex, budget: budget
+        ).flatMap(\.lines)
+        let summary = try #require(done.first)
+        #expect(summary.text == "$ ls -la · 完成 0")
+        #expect(summary.style == .body)
+        #expect(summary.color == .secondary)
+        #expect(summary.actionID == GlassAction.openBlock("s").actionID)
+        #expect(done.count == 1, "无输出时摘要就是整个片段")
+
+        // 还没有退出码时只给状态词，不显示空退出码
+        let running = TranscriptPaginator.paginate(
+            blocks: [
+                .shellCommand(
+                    id: "s", command: "npm test", cwd: nil, output: "",
+                    exitCode: nil, status: .running
+                )
+            ],
+            agent: .codex, budget: budget
+        ).flatMap(\.lines)
+        #expect(running.first?.text == "$ npm test · 运行中")
+    }
+
+    @Test("单文件改动收成一行白色 body「文件 +A −B · 已应用」")
+    func fileChangeSummaryMatchesMockup() throws {
+        let applied = TranscriptPaginator.paginate(
+            blocks: [
+                .fileChange(
+                    id: "f",
+                    files: [.init(path: "/tmp/demo/hello.txt", added: 1, removed: 0)],
+                    status: .ok
+                )
+            ],
+            agent: .codex, budget: budget
+        ).flatMap(\.lines)
+        let summary = try #require(applied.first)
+        #expect(summary.text == "hello.txt +1 −0 · 已应用")
+        #expect(summary.style == .body)
+        #expect(summary.color == .primary)
+        #expect(summary.actionID == GlassAction.openBlock("f").actionID)
+
+        let pending = TranscriptPaginator.paginate(
+            blocks: [
+                .fileChange(
+                    id: "f", files: [.init(path: "a.ts", added: nil, removed: nil)],
+                    status: .pending
+                )
+            ],
+            agent: .codex, budget: budget
+        ).flatMap(\.lines)
+        #expect(pending.first?.text == "a.ts · 待应用")
+
+        // 多文件退化为同格式汇总行 + 明细
+        let multi = TranscriptPaginator.paginate(
+            blocks: [
+                .fileChange(
+                    id: "f",
+                    files: [
+                        .init(path: "a.ts", added: 1, removed: 0),
+                        .init(path: "b.ts", added: 2, removed: 1),
+                    ],
+                    status: .ok
+                )
+            ],
+            agent: .codex, budget: budget
+        ).flatMap(\.lines)
+        #expect(multi.first?.text == "改动 2 个文件 · 已应用")
+        #expect(multi.first?.style == .body)
+    }
+
+    @Test("说话人标签与 mockup 一致：「你」与 agent 名都是绿色 meta")
+    func speakerLabelsMatchMockup() throws {
+        let lines = TranscriptPaginator.paginate(
+            blocks: [
+                .userMessage(id: "u", text: "列出这里的文件", imageCount: 0),
+                .agentMessage(id: "a", text: "我先看一下目录内容。", streaming: false),
+            ],
+            agent: .codex, budget: budget
+        ).flatMap(\.lines)
+        let user = try #require(lines.first)
+        #expect(user.text == "你")
+        #expect(user.style == .meta)
+        #expect(user.color == .secondary)
+        #expect(lines.contains { $0.text == "Codex" && $0.style == .meta && $0.color == .secondary })
+    }
+
+    @Test("shell 详情页：头=「$ 命令」+「完成 · 退出码 0」，输出升为白色 body")
+    func shellDetailMatchesMockup() throws {
+        let lines = TranscriptPaginator.detailPages(
+            for: .shellCommand(
+                id: "s", command: "ls -la", cwd: "/tmp/lenscrew-demo",
+                output: "total 16", exitCode: 0, status: .ok
+            ),
+            agent: .codex, budget: budget
+        ).flatMap(\.lines)
+        let head = try #require(lines.first)
+        #expect(head.text == "$ ls -la")
+        #expect(head.style == .heading)
+        #expect(lines.dropFirst().first?.text == "完成 · 退出码 0")
+        #expect(lines.contains { $0.text == "/tmp/lenscrew-demo" && $0.style == .meta })
+        #expect(lines.contains { $0.text == "total 16" && $0.style == .body && $0.color == .primary })
+    }
 }
