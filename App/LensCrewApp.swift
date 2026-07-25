@@ -24,8 +24,8 @@ enum RootTab {
 struct RootView: View {
     let model: CrewViewModel
     @State private var tab: RootTab = .sessions
-    /// 会话导航栈：元素是 sessionID
-    @State private var sessionPath: [String] = []
+    /// 会话导航栈：元素是 (hostID, sessionID) 复合键——裸 sessionID 跨主机会撞号
+    @State private var sessionPath: [SessionKey] = []
     @State private var showNewSession = false
 
     var body: some View {
@@ -36,8 +36,8 @@ struct RootView: View {
             case .sessions:
                 NavigationStack(path: $sessionPath) {
                     HomeScreen(model: model, path: $sessionPath)
-                        .navigationDestination(for: String.self) { sessionID in
-                            SessionScreen(model: model, sessionID: sessionID)
+                        .navigationDestination(for: SessionKey.self) { key in
+                            SessionScreen(model: model, sessionKey: key)
                         }
                 }
             case .glasses:
@@ -60,14 +60,19 @@ struct RootView: View {
             // 通知管线先接上：冷启动攒下的深链与 token 都靠 attach 冲账
             PushCoordinator.shared.attach(model)
             applyPendingRoute()
-            // 启动即连 active 主机；没配置过就等用户去设置页添加
+            // 启动即连全部已配置主机；没配置过就等用户去设置页添加
             if model.hosts.active != nil {
-                await model.connect()
+                await model.connectAll()
             }
         }
         .onChange(of: model.pendingSessionRoute) { _, route in
             guard route != nil else { return }
             applyPendingRoute()
+        }
+        // 眼镜跟随：点进哪个会话，真实眼镜就交给它所属的主机
+        .onChange(of: sessionPath) { _, path in
+            guard let key = path.last else { return }
+            Task { await model.focusHost(key.hostID) }
         }
     }
 

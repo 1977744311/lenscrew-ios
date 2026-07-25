@@ -3,10 +3,12 @@ import LensCrewCore
 import SwiftUI
 
 /// 屏 4 · 新会话：AGENT 单选 + 工作目录 MRU + 模式，底部「开始会话」。
+/// 配了多台电脑时可选目标主机，创建按 hostID 路由；单台时不出这排选择。
 struct NewSessionSheet: View {
     let model: CrewViewModel
     @Environment(\.dismiss) private var dismiss
     @State private var agent: AgentKind = .codex
+    @State private var hostID: UUID?
     @State private var selectedRoot: String?
     @State private var customRoot = ""
     @State private var editingCustomRoot = false
@@ -19,6 +21,16 @@ struct NewSessionSheet: View {
             return customRoot.trimmingCharacters(in: .whitespacesAndNewlines)
         }
         return selectedRoot ?? ""
+    }
+
+    /// 目标主机：默认 active；只有多主机时才提供切换
+    private var targetHostID: UUID? {
+        hostID ?? model.hosts.activeHostID
+    }
+
+    private var targetConnected: Bool {
+        guard let targetHostID else { return false }
+        return model.link(for: targetHostID)?.isConnected == true
     }
 
     var body: some View {
@@ -35,6 +47,9 @@ struct NewSessionSheet: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
+                    if model.hosts.hosts.count > 1 {
+                        hostSection
+                    }
                     agentSection
                     rootSection
                     modeSection
@@ -43,14 +58,17 @@ struct NewSessionSheet: View {
             .scrollDismissesKeyboard(.interactively)
 
             LCButton(title: "开始会话", kind: .primary) {
+                guard let target = targetHostID else { return }
                 let root = effectiveRoot
                 Task {
-                    await model.createSession(agent: agent, workspaceRoot: root, mode: mode)
+                    await model.createSession(
+                        agent: agent, workspaceRoot: root, mode: mode, on: target
+                    )
                 }
                 dismiss()
             }
-            .disabled(effectiveRoot.isEmpty || !model.isConnected)
-            .opacity(effectiveRoot.isEmpty || !model.isConnected ? 0.5 : 1)
+            .disabled(effectiveRoot.isEmpty || !targetConnected)
+            .opacity(effectiveRoot.isEmpty || !targetConnected ? 0.5 : 1)
         }
         .padding(.horizontal, 18)
         .padding(.top, 18)
@@ -63,6 +81,43 @@ struct NewSessionSheet: View {
                 selectedRoot = model.hosts.workspaceRoots.first
             }
         }
+    }
+
+    // MARK: - 电脑
+
+    /// 会话开在哪台 Mac 上；掉线主机也可选中，但「开始会话」会被禁用
+    private var hostSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SectionHeader(title: "电脑")
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(model.hosts.hosts) { host in
+                        hostChip(host)
+                    }
+                }
+            }
+        }
+    }
+
+    private func hostChip(_ host: BridgeHostConfig) -> some View {
+        let selected = targetHostID == host.id
+        let connected = model.link(for: host.id)?.isConnected == true
+        return Button {
+            hostID = host.id
+        } label: {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(connected ? LC.green : LC.text3)
+                    .frame(width: 7, height: 7)
+                Text(host.name)
+            }
+            .font(.system(size: 12, weight: selected ? .semibold : .medium))
+            .foregroundStyle(selected ? Color(hex: 0x111111) : LC.text2)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 5)
+            .background(selected ? Color(hex: 0xEAEAF0) : LC.elev2, in: Capsule())
+        }
+        .buttonStyle(.plain)
     }
 
     // MARK: - AGENT
@@ -122,10 +177,11 @@ struct NewSessionSheet: View {
         .buttonStyle(.plain)
     }
 
-    /// 副行：该 agent 最近一个会话用的 model；没有就只说它跑在本机。
+    /// 副行：该 agent 在目标主机上最近一个会话用的 model；没有就只说它跑在本机。
     /// OAuth/就绪状态没有真实探测渠道，不编。
     private func agentSub(_ kind: AgentKind) -> String {
-        let lastModel = model.sessions
+        let sessions = targetHostID.flatMap { model.link(for: $0)?.sessions } ?? []
+        let lastModel = sessions
             .filter { $0.session.agent == kind && $0.session.model != nil }
             .max { $0.session.updatedAtMs < $1.session.updatedAtMs }?
             .session.model

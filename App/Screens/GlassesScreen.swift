@@ -5,11 +5,12 @@ import LensCrewCore
 import SwiftUI
 
 /// 屏 5 · 眼镜：设备状态 + 眼镜画面实时预览（手机是眼镜的取景器）+ 自动亮屏开关。
+/// 画面与快照都取聚焦主机的——真实眼镜此刻就归它驱动。
 struct GlassesScreen: View {
     let model: CrewViewModel
 
     private var preview: GlassPreview.Output {
-        GlassPreview.compose(screen: model.glassScreen, sessions: model.sessions)
+        GlassPreview.compose(screen: model.glassScreen, sessions: model.focusedSessions)
     }
 
     var body: some View {

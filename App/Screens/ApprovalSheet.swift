@@ -1,9 +1,10 @@
 import AgentProtocol
 import SwiftUI
 
-/// 审批 sheet 的入参：会话上下文 + 请求本体
+/// 审批 sheet 的入参：会话上下文 + 请求本体。
+/// 携带复合键，裁决按所属主机路由（会话 id 跨主机会撞号）。
 struct ApprovalPresentation: Identifiable {
-    let sessionID: String
+    let sessionKey: SessionKey
     let sessionTitle: String
     let agent: AgentKind
     let approval: ApprovalRequest
@@ -201,7 +202,7 @@ struct ApprovalSheet: View {
         submittedOptionID = option.id
         Task {
             await model.resolve(
-                approval: approval, in: presentation.sessionID, optionID: option.id
+                approval: approval, in: presentation.sessionKey, optionID: option.id
             )
         }
     }

@@ -29,61 +29,123 @@ struct TurnMarker: Identifiable, Equatable {
     }
 }
 
-/// 全 App 唯一 VM：连接生命周期、会话快照、眼镜状态、偏好。
+/// 聚合列表用的轻量投影：一条会话 + 它的主机归属。
+/// Watch 转发聚合会话列表时也照这个形状取数。
+struct AggregatedSession: Identifiable, Sendable {
+    let hostID: UUID
+    let hostName: String
+    let state: SessionState
+
+    var key: SessionKey { SessionKey(hostID: hostID, sessionID: state.session.id) }
+    var id: SessionKey { key }
+}
+
+/// 跨主机合并后的待审批条目。approval.id 也可能跨主机撞号，id 里必须掺 hostID。
+struct PendingApprovalItem: Identifiable, Sendable {
+    let hostID: UUID
+    let hostName: String
+    let session: AgentSession
+    let approval: ApprovalRequest
+
+    var key: SessionKey { SessionKey(hostID: hostID, sessionID: session.id) }
+    var id: String { "\(hostID.uuidString)#\(approval.id)" }
+}
+
+/// 全 App 唯一 VM。多主机形态：每台已配置主机一条 HostLink（tap + coordinator +
+/// 快照），本类只做聚合（会话列表/审批队列）、按 (hostID, sessionID) 路由动作、
+/// 管理眼镜聚焦与偏好。单主机时退化成从前的单连接行为。
 @MainActor
 @Observable
 final class CrewViewModel {
     let hosts = HostStore()
 
-    private(set) var linkState: BridgeLinkState = .disconnected
-    private(set) var sessions: [SessionState] = []
-    private(set) var glassScreen: GlassScreen = .sessionList
+    /// 每台已配置主机一条连接单元；key = 主机 UUID
+    private(set) var links: [UUID: HostLink] = [:]
+    /// 驱动真实眼镜的主机。默认 = active 主机；点进某会话时跟随到它所属的主机
+    private(set) var focusedHostID: UUID?
     private(set) var glassesState: GlassesSessionState = .idle
     private(set) var displayState: GlassesKit.DisplayState = .stopped
     private(set) var lastError: String?
-    /// /health 往返毫秒数，Home 顶部主机 chip 用；连不上为 nil
-    private(set) var latencyMs: Int?
-    /// paired 主机实际走的链路（直连/中继）；manual 主机或未连接为 nil
-    private(set) var linkPath: HostLinkPath?
-    /// 通知深链的目的地（sessionID）；RootView 观察它完成导航后清掉
-    private(set) var pendingSessionRoute: String?
-    /// sessionID → 轮次分隔线（按到达顺序）
-    private(set) var turnMarkers: [String: [TurnMarker]] = [:]
-    /// 本机发起创建的会话的模式；listSessions 拉回的旧会话拿不到，不硬猜
-    private(set) var sessionModes: [String: SessionMode] = [:]
+    /// 通知深链的目的地；RootView 观察它完成导航后清掉
+    private(set) var pendingSessionRoute: SessionKey?
 
     // 偏好：落 UserDefaults，键名见 PrefKeys
     private(set) var autoPresentApprovals: Bool
     private(set) var notifyOnApproval: Bool
     private(set) var notifyOnTurnCompleted: Bool
 
+    /// 唯一的真实眼镜会话（真机或 Mock），只有聚焦主机的网关会把渲染送进来
     private let glasses = GlassesRuntime.makeSession()
-    private var connection: BridgeConnectionTap?
-    private var coordinator: CrewCoordinator?
-    /// 当前 paired 主机的安全连接（registerPush 只有它有）；manual 连接时为 nil
-    private var secureConnection: SecureBridgeConnection?
-    /// APNs device token（hex），注册回调到达后缓存，连接建立/开关变化时重发
+    /// APNs device token（hex），注册回调到达后缓存，各主机连接建立/开关变化时重发
     private var apnsTokenHex: String?
-    private var pumps: [Task<Void, Never>] = []
-    /// 等待与 sessionCreated 配对的创建模式（FIFO，见 digest）
-    private var pendingModes: [SessionMode] = []
-    /// 旁路流里看到的每个会话最后一个块，turnCompleted 锚点用
-    private var lastBlockID: [String: String] = [:]
 
     var usingMockGlasses: Bool { GlassesRuntime.isMock }
-
-    var isConnected: Bool {
-        if case .connected = linkState { return true }
-        return false
-    }
-
     var glassesMounted: Bool { displayState == .started }
 
-    /// 跨会话汇总的待审批，按请求时间倒序——最新的最该先看到
-    var pendingApprovalItems: [(session: AgentSession, approval: ApprovalRequest)] {
-        sessions
-            .flatMap { state in state.pendingApprovals.map { (state.session, $0) } }
-            .sorted { $0.1.requestedAtMs > $1.1.requestedAtMs }
+    func link(for id: UUID) -> HostLink? { links[id] }
+
+    var focusedLink: HostLink? { focusedHostID.flatMap { links[$0] } }
+
+    private var activeLink: HostLink? { hosts.activeHostID.flatMap { links[$0] } }
+
+    /// active 主机的连接面（Home 主机 chip 沿用原语义）
+    var linkState: BridgeLinkState { activeLink?.linkState ?? .disconnected }
+    var latencyMs: Int? { activeLink?.latencyMs }
+    var linkPath: HostLinkPath? { activeLink?.linkPath }
+
+    /// 任一主机在线即可用（聚合列表非空、能发动作的先决条件）
+    var isConnected: Bool {
+        links.values.contains { $0.isConnected }
+    }
+
+    /// 眼镜屏快照取聚焦主机的；预览组装也要用同一台主机的会话解引用
+    var glassScreen: GlassScreen { focusedLink?.glassScreen ?? .sessionList }
+    var focusedSessions: [SessionState] { focusedLink?.sessions ?? [] }
+
+    // MARK: - 聚合
+
+    /// 全部主机的会话打平后按最近活动统一排序；主机顺序不影响结果
+    var aggregatedSessions: [AggregatedSession] {
+        hosts.hosts
+            .flatMap { host in
+                (links[host.id]?.sessions ?? []).map {
+                    AggregatedSession(hostID: host.id, hostName: host.name, state: $0)
+                }
+            }
+            .sorted { $0.state.session.updatedAtMs > $1.state.session.updatedAtMs }
+    }
+
+    /// 跨全部主机汇总的待审批，按请求时间倒序——最新的最该先看到。
+    /// Watch 转发审批队列时也照这个形状取数。
+    var pendingApprovalItems: [PendingApprovalItem] {
+        hosts.hosts
+            .flatMap { host in
+                (links[host.id]?.sessions ?? []).flatMap { state in
+                    state.pendingApprovals.map {
+                        PendingApprovalItem(
+                            hostID: host.id, hostName: host.name,
+                            session: state.session, approval: $0
+                        )
+                    }
+                }
+            }
+            .sorted { $0.approval.requestedAtMs > $1.approval.requestedAtMs }
+    }
+
+    func sessionState(for key: SessionKey) -> SessionState? {
+        links[key.hostID]?.sessions.first { $0.session.id == key.sessionID }
+    }
+
+    func turnMarkers(for key: SessionKey) -> [TurnMarker] {
+        links[key.hostID]?.turnMarkers[key.sessionID] ?? []
+    }
+
+    func sessionMode(for key: SessionKey) -> SessionMode? {
+        links[key.hostID]?.sessionModes[key.sessionID]
+    }
+
+    func hostName(for id: UUID) -> String {
+        hosts.hosts.first { $0.id == id }?.name ?? ""
     }
 
     init() {
@@ -98,182 +160,124 @@ final class CrewViewModel {
 
     // MARK: - bridge
 
-    func connect() async {
-        guard let host = hosts.active else {
+    /// 启动/整体重连入口：所有已配置主机各起一条连接，一台连不上不拖累其他台
+    func connectAll() async {
+        guard !hosts.hosts.isEmpty else {
             lastError = "先在设置里添加一台电脑"
             return
         }
-        await disconnect()
-        if host.isPaired {
-            await connectPaired(host)
-        } else {
-            await connectManual(host)
+        if focusedHostID == nil { focusedHostID = hosts.activeHostID }
+        // 并发各连各的（Task 继承 MainActor，网络等待时会让出主线程）
+        let attempts = hosts.hosts.map { host in
+            Task { await self.connectHost(host.id) }
         }
-    }
-
-    /// manual 主机：口令 + 明文 HTTP，行为与改造前完全一致
-    private func connectManual(_ host: BridgeHostConfig) async {
-        guard let baseURL = host.baseURL, !host.host.isEmpty else {
-            lastError = "主机地址无效，去设置里改一下"
-            return
-        }
-        let token = hosts.token(for: host.id)
-        guard !token.isEmpty else {
-            lastError = "这台电脑还没填访问口令"
-            return
-        }
-        do {
-            try await start(
-                base: HTTPBridgeConnection(
-                    endpoint: BridgeEndpoint(baseURL: baseURL, token: token)
-                ),
-                host: host
-            )
-            startHealthLoop(baseURL: baseURL)
-        } catch {
-            lastError = describe(error)
-        }
-    }
-
-    /// paired 主机：LAN 直连优先，失败且有 relay 再走中继；两条都不通把失败挂到
-    /// linkState 上展示。trustedMac 公钥来自 Keychain，走 trusted_reconnect。
-    private func connectPaired(_ host: BridgeHostConfig) async {
-        guard let publicKey = hosts.macIdentityPublicKey(for: host.id) else {
-            lastError = "配对记录不完整（缺 Mac 身份公钥），删除这台电脑后重新扫码"
-            return
-        }
-        let attempts = host.pairedEndpoints(macIdentityPublicKey: publicKey)
-        guard !attempts.isEmpty else {
-            lastError = "这台电脑没有可用的连接方式，重新扫码配对一次"
-            return
-        }
-        var failure = "无法连接"
         for attempt in attempts {
-            let secure = SecureBridgeConnection(endpoint: attempt.endpoint)
-            do {
-                try await start(base: secure, host: host, capSeconds: 15)
-                secureConnection = secure
-                linkPath = attempt.path
-                // /health 是 bridge 的直连端点，relay 上没有，延迟计量只在直连时有
-                if case let .direct(baseURL) = attempt.endpoint.transport {
-                    startHealthLoop(baseURL: baseURL)
-                }
-                await sendPushRegistration()
-                return
-            } catch {
-                failure = humanizeSecureError(describe(error))
-                await disconnect()
-            }
-        }
-        lastError = failure
-        linkState = .failed(failure)
-    }
-
-    /// 两种形态共用的接线：包旁路、起协调器与泵、握手、拉存量会话。
-    /// capSeconds 给安全连接的首次握手加上限——LAN 地址不可达时不能陪系统
-    /// TCP 超时耗完，否则 relay 兜底迟迟接不了手。
-    private func start(
-        base: any BridgeConnecting, host: BridgeHostConfig, capSeconds: Double? = nil
-    ) async throws {
-        let connection = BridgeConnectionTap(wrapping: base)
-        let coordinator = CrewCoordinator(bridge: connection, glasses: glasses)
-        self.connection = connection
-        self.coordinator = coordinator
-        await coordinator.setAutoPresentApprovals(autoPresentApprovals)
-
-        pumps.append(
-            Task { [weak self] in
-                for await state in connection.linkStates {
-                    await MainActor.run { self?.absorb(linkState: state) }
-                }
-            }
-        )
-        pumps.append(
-            Task { [weak self] in
-                for await snapshot in coordinator.snapshots {
-                    await MainActor.run {
-                        self?.sessions = snapshot.sessions
-                        self?.glassScreen = snapshot.glassScreen
-                    }
-                }
-            }
-        )
-        pumps.append(
-            Task { [weak self] in
-                for await event in connection.tapped {
-                    await MainActor.run { self?.digest(event) }
-                }
-            }
-        )
-        pumps.append(Task { [glasses] in await coordinator.run(glasses: glasses) })
-
-        if let capSeconds, let secure = base as? SecureBridgeConnection {
-            try await secure.connectCapped(seconds: capSeconds)
-        } else {
-            try await connection.connect()
-        }
-        // 已经在跑的会话要拉回来，否则手机重启后看不到 Mac 上的现场
-        try await connection.send(.listSessions)
-        hosts.markConnected(host.id)
-        lastError = nil
-    }
-
-    /// linkStates 泵的落点：paired 连接每次（重）建立都把推送注册补发一遍——
-    /// SecureBridgeConnection 内部断线重连不会重走 connect()，只有这里能看到
-    private func absorb(linkState state: BridgeLinkState) {
-        linkState = state
-        if case .connected = state, secureConnection != nil {
-            Task { await self.sendPushRegistration() }
+            await attempt.value
         }
     }
 
-    func disconnect() async {
-        for pump in pumps { pump.cancel() }
-        pumps = []
-        await connection?.disconnect()
-        connection = nil
-        coordinator = nil
-        secureConnection = nil
-        linkPath = nil
-        sessions = []
-        turnMarkers = [:]
-        sessionModes = [:]
-        pendingModes = []
-        lastBlockID = [:]
-        latencyMs = nil
-        linkState = .disconnected
+    /// 单台主机（重）连；连接单元不存在就创建
+    func connectHost(_ id: UUID) async {
+        guard hosts.hosts.contains(where: { $0.id == id }) else { return }
+        if focusedHostID == nil { focusedHostID = hosts.activeHostID ?? id }
+        await ensureLink(id).connect()
     }
 
-    /// 切主机 = 断当前连接 → 切 active → 用新配置重连
+    private func ensureLink(_ id: UUID) -> HostLink {
+        if let existing = links[id] { return existing }
+        let link = HostLink(
+            hostID: id,
+            store: hosts,
+            realGlasses: glasses,
+            focused: id == focusedHostID,
+            autoPresentApprovals: autoPresentApprovals,
+            reportError: { [weak self] message in
+                self?.reportHostError(message, hostID: id)
+            },
+            pushRegistration: { [weak self] in
+                guard let self, let token = self.apnsTokenHex else { return nil }
+                return (
+                    token,
+                    PushAlertsEnabled(
+                        approvals: self.notifyOnApproval, turns: self.notifyOnTurnCompleted
+                    )
+                )
+            }
+        )
+        links[id] = link
+        return link
+    }
+
+    /// 多台主机并存时连接错误要能归属到主机；单台时保持原文案
+    private func reportHostError(_ message: String?, hostID: UUID) {
+        guard let message else {
+            lastError = nil
+            return
+        }
+        lastError = hosts.hosts.count > 1 ? "\(hostName(for: hostID))：\(message)" : message
+    }
+
+    /// 切主机 = 换 active + 眼镜聚焦跟过去。连接是常驻的，断着才补连。
     func switchHost(to id: UUID) async {
-        guard id != hosts.activeHostID else { return }
-        await disconnect()
+        guard hosts.hosts.contains(where: { $0.id == id }) else { return }
         hosts.setActive(id)
-        await connect()
+        await focusHost(id)
+        if links[id]?.isConnected != true {
+            await connectHost(id)
+        }
     }
 
-    /// 删除主机；删的是 active 就顺带断开并落到下一台（有的话）
+    /// 删除主机：先彻底停它的连接单元（泵、眼镜网关订阅），再删配置。
+    /// 删的是聚焦/active 主机就落到下一台（有的话）并确保它在线。
     func removeHost(_ id: UUID) async {
-        let wasActive = id == hosts.activeHostID
-        if wasActive { await disconnect() }
+        if let link = links.removeValue(forKey: id) {
+            await link.shutdown()
+        }
         hosts.remove(id)
-        if wasActive, hosts.active != nil { await connect() }
+        if focusedHostID == id {
+            focusedHostID = hosts.activeHostID
+            await applyFocus()
+        }
+        if let next = hosts.activeHostID, links[next] == nil {
+            await connectHost(next)
+        }
     }
 
-    /// 改口令后若正连着这台主机，立即用新口令重连
+    /// 改口令后若这台主机有连接单元，立即用新口令重连
     func updateToken(_ token: String, for id: UUID) async {
         hosts.setToken(token, for: id)
-        if id == hosts.activeHostID, isConnected {
-            await disconnect()
-            await connect()
+        if links[id] != nil {
+            await connectHost(id)
+        }
+    }
+
+    // MARK: - 眼镜聚焦
+
+    /// 把真实眼镜交给某台主机：其余主机的网关全部退回各自的 Mock。
+    /// 用户点进某会话时调用，眼镜「跟随」到正在看的会话所在的 Mac。
+    func focusHost(_ id: UUID) async {
+        guard hosts.hosts.contains(where: { $0.id == id }) else { return }
+        guard focusedHostID != id else { return }
+        focusedHostID = id
+        await applyFocus()
+    }
+
+    private func applyFocus() async {
+        // 先让出真机再交给新主机，避免两个 coordinator 同时往真机发帧
+        for (hostID, link) in links where hostID != focusedHostID {
+            await link.setFocused(false)
+        }
+        if let focused = focusedLink {
+            await focused.setFocused(true)
         }
     }
 
     // MARK: - 扫码配对
 
     /// qr_bootstrap 首配：用二维码 payload 建临时连接完成握手（验签通过才算数），
-    /// 把学到的 TrustedMac 持久化成 paired 主机并切换过去。之后的每次连接
-    /// （包括冷启动）都凭 Keychain 里的公钥走 trusted_reconnect，二维码一次性。
+    /// 把学到的 TrustedMac 持久化成 paired 主机、切成 active 并纳入多连接。
+    /// 之后的每次连接（包括冷启动）都凭 Keychain 里的公钥走 trusted_reconnect，
+    /// 二维码一次性。其余主机的连接不受影响。
     func pair(with payload: PairingPayload) async throws {
         let phone = PhonePairingIdentity.shared
         var transports: [SecureBridgeEndpoint.Transport] = []
@@ -300,7 +304,7 @@ final class CrewViewModel {
             do {
                 try await connection.connectCapped(seconds: 15)
             } catch {
-                failure = humanizeSecureError(describe(error))
+                failure = humanizeSecureError(describeBridgeError(error))
                 await connection.disconnect()
                 continue
             }
@@ -320,9 +324,13 @@ final class CrewViewModel {
                 lanPort: payload.lan?.port,
                 relay: payload.relay
             )
-            await disconnect()
+            // 重复扫同一台 Mac 会原地刷新配置，旧连接要用新地址重建
+            if let existing = links[config.id] {
+                await existing.disconnect()
+            }
             hosts.setActive(config.id)
-            await connect()
+            await focusHost(config.id)
+            await connectHost(config.id)
             return
         }
         throw PairingFlowError(message: failure)
@@ -330,67 +338,62 @@ final class CrewViewModel {
 
     // MARK: - 推送注册
 
-    /// APNs 注册回调送来的 device token（hex）。到达即尝试上报。
+    /// APNs 注册回调送来的 device token（hex）。到达即向每台主机各报一份。
     func updatePushToken(_ hex: String) {
         guard hex != apnsTokenHex else { return }
         apnsTokenHex = hex
-        Task { await self.sendPushRegistration() }
+        broadcastPushRegistration()
     }
 
-    /// 幂等重发：token 到达、开关变化、连接（重）建立都整体发一次。
-    /// manual 主机没有 registerPush 通道（secureConnection 为 nil），静默跳过。
-    private func sendPushRegistration() async {
-        guard let secureConnection, isConnected, let apnsTokenHex else { return }
-        #if DEBUG
-            let environment = "development"
-        #else
-            let environment = "production"
-        #endif
-        try? await secureConnection.registerPush(
-            deviceToken: apnsTokenHex,
-            environment: environment,
-            alertsEnabled: PushAlertsEnabled(
-                approvals: notifyOnApproval, turns: notifyOnTurnCompleted
-            )
-        )
+    /// token 同一个，每台 paired 主机各自注册（manual 主机在 link 内静默跳过）
+    private func broadcastPushRegistration() {
+        for link in links.values {
+            Task { await link.sendPushRegistration() }
+        }
     }
 
     // MARK: - 通知深链
 
-    func routeToSession(_ sessionID: String) {
-        pendingSessionRoute = sessionID
+    /// 通知 payload 的 macDeviceId 能映射到已配置主机就路由到那台；映射不到落聚焦主机
+    func routeToSession(_ sessionID: String, macDeviceId: String?) {
+        let hostID =
+            macDeviceId.flatMap { mac in
+                hosts.hosts.first { $0.macDeviceId == mac }?.id
+            } ?? focusedHostID ?? hosts.activeHostID
+        guard let hostID else { return }
+        pendingSessionRoute = SessionKey(hostID: hostID, sessionID: sessionID)
     }
 
     func clearSessionRoute() {
         pendingSessionRoute = nil
     }
 
-    // MARK: - 会话
+    // MARK: - 会话（按主机路由）
 
     func createSession(
-        agent: AgentKind, workspaceRoot: String, mode: SessionMode
+        agent: AgentKind, workspaceRoot: String, mode: SessionMode, on hostID: UUID
     ) async {
-        await run {
+        let sent = await run(on: hostID) {
             try await $0.createSession(agent: agent, workspaceRoot: workspaceRoot, mode: mode)
-            await MainActor.run {
-                self.hosts.remember(root: workspaceRoot)
-                self.pendingModes.append(mode)
-            }
+        }
+        if sent {
+            hosts.remember(root: workspaceRoot)
+            links[hostID]?.notePendingMode(mode)
         }
     }
 
-    func send(_ text: String, to sessionID: String) async {
-        await run { try await $0.sendMessage(text, to: sessionID) }
+    func send(_ text: String, to key: SessionKey) async {
+        await run(on: key.hostID) { try await $0.sendMessage(text, to: key.sessionID) }
     }
 
-    func interrupt(_ sessionID: String) async {
-        await run { try await $0.interrupt(sessionID) }
+    func interrupt(_ key: SessionKey) async {
+        await run(on: key.hostID) { try await $0.interrupt(key.sessionID) }
     }
 
-    func resolve(approval: ApprovalRequest, in sessionID: String, optionID: String) async {
-        await run {
+    func resolve(approval: ApprovalRequest, in key: SessionKey, optionID: String) async {
+        await run(on: key.hostID) {
             try await $0.resolveApproval(
-                sessionID: sessionID, approvalID: approval.id, optionID: optionID
+                sessionID: key.sessionID, approvalID: approval.id, optionID: optionID
             )
         }
     }
@@ -401,10 +404,10 @@ final class CrewViewModel {
         do {
             try await glasses.start()
             try await glasses.attachDisplay()
-            await coordinator?.displayReattached()
+            await focusedLink?.coordinator?.displayReattached()
             lastError = nil
         } catch {
-            lastError = describe(error)
+            lastError = describeBridgeError(error)
         }
     }
 
@@ -415,101 +418,47 @@ final class CrewViewModel {
 
     // MARK: - 偏好
 
+    /// 自动亮屏对聚焦主机的 coordinator 生效；直接同步到全部主机，
+    /// 切聚焦时无需再补一遍
     func setAutoPresentApprovals(_ enabled: Bool) {
         autoPresentApprovals = enabled
         UserDefaults.standard.set(enabled, forKey: PrefKeys.autoPresentApprovals)
-        Task { [coordinator] in await coordinator?.setAutoPresentApprovals(enabled) }
+        for link in links.values {
+            link.setAutoPresentApprovals(enabled)
+        }
     }
 
     func setNotifyOnApproval(_ enabled: Bool) {
         notifyOnApproval = enabled
         UserDefaults.standard.set(enabled, forKey: PrefKeys.notifyApproval)
         if enabled { PushCoordinator.shared.enableNotifications() }
-        Task { await self.sendPushRegistration() }
+        broadcastPushRegistration()
     }
 
     func setNotifyOnTurnCompleted(_ enabled: Bool) {
         notifyOnTurnCompleted = enabled
         UserDefaults.standard.set(enabled, forKey: PrefKeys.notifyTurnCompleted)
         if enabled { PushCoordinator.shared.enableNotifications() }
-        Task { await self.sendPushRegistration() }
+        broadcastPushRegistration()
     }
 
     // MARK: - 内部
 
-    /// 旁路事件消化：只取协调层不外露的信息（轮次用量、创建模式配对），
-    /// 会话状态本身仍以 coordinator 的快照为准，两边不重复建状态机。
-    private func digest(_ event: BridgeEvent) {
-        switch event {
-        case let .sessionCreated(_, session):
-            if !pendingModes.isEmpty {
-                sessionModes[session.id] = pendingModes.removeFirst()
-            }
-
-        case let .blockAppended(_, sessionID, block):
-            lastBlockID[sessionID] = block.id
-
-        case let .turnCompleted(seq, sessionID, input, output, cached, _):
-            // 没有任何用量就不加分隔线——mockup 的 42s/98% 是示意，拿不到不编
-            guard input != nil || output != nil else { return }
-            guard let anchor = lastBlockID[sessionID] else { return }
-            let marker = TurnMarker(
-                id: "turn-\(sessionID)-\(seq)", afterBlockID: anchor,
-                inputTokens: input, outputTokens: output, cachedInputTokens: cached
-            )
-            // 断线重连会重放事件，同 seq 的分隔线只收一次
-            guard turnMarkers[sessionID]?.contains(where: { $0.id == marker.id }) != true
-            else { return }
-            turnMarkers[sessionID, default: []].append(marker)
-
-        default:
-            break
-        }
-    }
-
-    /// 每 10 秒探一次 /health 量延迟。无鉴权端点，只做 RTT 计量。
-    private func startHealthLoop(baseURL: URL) {
-        pumps.append(
-            Task { [weak self] in
-                while !Task.isCancelled {
-                    let ms = await Self.measureHealth(baseURL: baseURL)
-                    guard !Task.isCancelled else { return }
-                    await MainActor.run { self?.latencyMs = ms }
-                    try? await Task.sleep(for: .seconds(10))
-                }
-            }
-        )
-    }
-
-    private nonisolated static func measureHealth(baseURL: URL) async -> Int? {
-        var request = URLRequest(url: baseURL.appendingPathComponent("health"))
-        request.timeoutInterval = 5
-        let clock = ContinuousClock()
-        let start = clock.now
-        do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            guard (response as? HTTPURLResponse)?.statusCode == 200 else { return nil }
-            let elapsed = start.duration(to: clock.now)
-            let ms = Int(elapsed.components.seconds) * 1000
-                + Int(elapsed.components.attoseconds / 1_000_000_000_000_000)
-            return max(ms, 1)
-        } catch {
-            return nil
-        }
-    }
-
+    @discardableResult
     private func run(
-        _ body: @escaping @Sendable (CrewCoordinator) async throws -> Void
-    ) async {
-        guard let coordinator else {
+        on hostID: UUID, _ body: @escaping @Sendable (CrewCoordinator) async throws -> Void
+    ) async -> Bool {
+        guard let coordinator = links[hostID]?.coordinator else {
             lastError = "还没连上 bridge"
-            return
+            return false
         }
         do {
             try await body(coordinator)
             lastError = nil
+            return true
         } catch {
-            lastError = describe(error)
+            lastError = describeBridgeError(error)
+            return false
         }
     }
 
@@ -529,17 +478,6 @@ final class CrewViewModel {
                 await MainActor.run { self.lastError = String(describing: fault) }
             }
         }
-    }
-
-    private func describe(_ error: any Error) -> String {
-        if let linkError = error as? BridgeLinkError {
-            switch linkError {
-            case .notConnected: return "连接已断开"
-            case let .transport(message): return message
-            case let .decoding(message): return "解析失败：\(message)"
-            }
-        }
-        return String(describing: error)
     }
 
     private enum PrefKeys {

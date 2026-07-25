@@ -3,13 +3,13 @@ import BridgeLink
 import LensCrewCore
 import SwiftUI
 
-/// 屏 1 · 指挥台：跨会话的审批队列置顶 + 按最近活动排的会话列表。
+/// 屏 1 · 指挥台：跨主机合并的审批队列置顶 + 全部主机会话按最近活动统一排序。
 struct HomeScreen: View {
     let model: CrewViewModel
-    @Binding var path: [String]
+    @Binding var path: [SessionKey]
     @State private var filter: AgentKind?
     /// 已发出裁决、还没等到 approvalSettled 的审批：期间禁用按钮防止重复提交，
-    /// 但卡不撤——撤卡的唯一依据是 bridge 的结清事件
+    /// 但卡不撤——撤卡的唯一依据是 bridge 的结清事件。键是 hostID#approvalID。
     @State private var resolvingApprovals: Set<String> = []
 
     var body: some View {
@@ -53,13 +53,13 @@ struct HomeScreen: View {
                     Text(model.glassesMounted ? "眼镜已挂载" : "眼镜未挂载")
                 }
                 if model.isConnected {
-                    LCChip { Text("\(model.sessions.count) 个会话") }
+                    LCChip { Text("\(model.aggregatedSessions.count) 个会话") }
                 }
             }
         }
     }
 
-    /// 主机状态 chip，点击弹快速切换菜单
+    /// 主机状态 chip，点击弹快速切换菜单；chip 本体展示 active 主机的连接面
     private var hostChip: some View {
         Menu {
             ForEach(model.hosts.hosts) { host in
@@ -67,15 +67,18 @@ struct HomeScreen: View {
                     Task { await model.switchHost(to: host.id) }
                 } label: {
                     if host.id == model.hosts.activeHostID {
-                        Label(host.name, systemImage: "checkmark")
+                        Label(menuTitle(host), systemImage: "checkmark")
                     } else {
-                        Text(host.name)
+                        Text(menuTitle(host))
                     }
                 }
             }
-            if model.hosts.active != nil, !model.isConnected {
+            if model.hosts.active != nil, !activeConnected {
                 Divider()
-                Button("重新连接") { Task { await model.connect() } }
+                Button("重新连接") {
+                    guard let id = model.hosts.activeHostID else { return }
+                    Task { await model.connectHost(id) }
+                }
             }
         } label: {
             LCChip {
@@ -84,6 +87,19 @@ struct HomeScreen: View {
                 Text(hostChipText)
             }
         }
+    }
+
+    /// 多主机时给掉线的主机标出状态，切过去之前就能看到；单主机沿用纯名称
+    private func menuTitle(_ host: BridgeHostConfig) -> String {
+        guard model.hosts.hosts.count > 1,
+              model.link(for: host.id)?.isConnected != true
+        else { return host.name }
+        return "\(host.name) · 未连接"
+    }
+
+    private var activeConnected: Bool {
+        if case .connected = model.linkState { return true }
+        return false
     }
 
     private var hostChipText: String {
@@ -128,20 +144,24 @@ struct HomeScreen: View {
                 title: "等你审批 · \(model.pendingApprovalItems.count)",
                 titleColor: LC.orange
             )
-            ForEach(model.pendingApprovalItems, id: \.approval.id) { item in
-                approvalCard(session: item.session, approval: item.approval)
+            ForEach(model.pendingApprovalItems) { item in
+                approvalCard(item)
             }
         }
     }
 
-    private func approvalCard(session: AgentSession, approval: ApprovalRequest) -> some View {
-        VStack(alignment: .leading, spacing: 9) {
+    private func approvalCard(_ item: PendingApprovalItem) -> some View {
+        let approval = item.approval
+        return VStack(alignment: .leading, spacing: 9) {
             HStack(spacing: 8) {
-                AgentBadge(agent: session.agent)
-                Text(session.title)
+                AgentBadge(agent: item.session.agent)
+                Text(item.session.title)
                     .font(.system(size: 12))
                     .foregroundStyle(LC.text3)
                     .lineLimit(1)
+                if model.hosts.hosts.count > 1 {
+                    LCChip(fontSize: 10) { Text(item.hostName) }
+                }
                 Spacer()
                 Text(relativeTime(fromMs: approval.requestedAtMs))
                     .font(.system(size: 12))
@@ -164,20 +184,20 @@ struct HomeScreen: View {
                 .padding(.vertical, 7)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
-            let resolving = resolvingApprovals.contains(approval.id)
+            let resolving = resolvingApprovals.contains(item.id)
             HStack(spacing: 8) {
                 LCButton(title: "查看上下文", kind: .tinted, minHeight: 40, fontSize: 14) {
-                    path.append(session.id)
+                    path.append(item.key)
                 }
                 if let once = onceAllowOption(approval) {
                     LCButton(
                         title: resolving ? "等待确认…" : "允许一次",
                         kind: .primary, minHeight: 40, fontSize: 14
                     ) {
-                        resolvingApprovals.insert(approval.id)
+                        resolvingApprovals.insert(item.id)
                         Task {
                             await model.resolve(
-                                approval: approval, in: session.id, optionID: once.id
+                                approval: approval, in: item.key, optionID: once.id
                             )
                         }
                     }
@@ -201,13 +221,14 @@ struct HomeScreen: View {
 
     // MARK: - 会话列表
 
-    private var orderedSessions: [SessionState] {
-        model.sessions.sorted { $0.session.updatedAtMs > $1.session.updatedAtMs }
+    /// 聚合列表：全部主机的会话，VM 已按最近活动跨主机统一排序
+    private var orderedSessions: [AggregatedSession] {
+        model.aggregatedSessions
     }
 
-    private var filteredSessions: [SessionState] {
+    private var filteredSessions: [AggregatedSession] {
         guard let filter else { return orderedSessions }
-        return orderedSessions.filter { $0.session.agent == filter }
+        return orderedSessions.filter { $0.state.session.agent == filter }
     }
 
     private var sessionsSection: some View {
@@ -218,13 +239,13 @@ struct HomeScreen: View {
                 emptySessionsCard
             } else {
                 VStack(spacing: 0) {
-                    ForEach(Array(filteredSessions.enumerated()), id: \.element.session.id) {
-                        index, state in
+                    ForEach(Array(filteredSessions.enumerated()), id: \.element.id) {
+                        index, item in
                         if index > 0 {
                             Hairline().padding(.leading, 16)
                         }
-                        NavigationLink(value: state.session.id) {
-                            sessionRow(state)
+                        NavigationLink(value: item.key) {
+                            sessionRow(item)
                         }
                         .buttonStyle(.plain)
                     }
@@ -234,9 +255,9 @@ struct HomeScreen: View {
         }
     }
 
-    /// agent 过滤：一键只看某个运行时。只给有会话的 agent 出 chip。
+    /// agent 过滤：一键只看某个运行时，对聚合列表生效。只给有会话的 agent 出 chip。
     private var filterChips: some View {
-        let counts = Dictionary(grouping: orderedSessions, by: \.session.agent)
+        let counts = Dictionary(grouping: orderedSessions, by: \.state.session.agent)
             .mapValues(\.count)
         return ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
@@ -270,8 +291,9 @@ struct HomeScreen: View {
         .buttonStyle(.plain)
     }
 
-    private func sessionRow(_ state: SessionState) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
+    private func sessionRow(_ item: AggregatedSession) -> some View {
+        let state = item.state
+        return VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 8) {
                 AgentBadge(agent: state.session.agent)
                 StatusPill(style: .session(state.session.status))
@@ -291,9 +313,9 @@ struct HomeScreen: View {
             HStack(spacing: 6) {
                 Image(systemName: "folder").font(.system(size: 11))
                 Text(metaLine(state.session)).lineLimit(1)
-                // 配了多台电脑才标注归属；单连接架构下所有会话都属于 active 主机
-                if model.hosts.hosts.count > 1, let host = model.hosts.active {
-                    LCChip(fontSize: 10) { Text(host.name) }
+                // 配了多台电脑才标注归属，单主机不加视觉噪音
+                if model.hosts.hosts.count > 1 {
+                    LCChip(fontSize: 10) { Text(item.hostName) }
                 }
             }
             .font(.system(size: 12))

@@ -83,7 +83,7 @@ struct SettingsScreen: View {
             icon: "laptopcomputer",
             tint: isActive ? LC.lightBlue : Color(hex: 0xEBEBF5).opacity(0.45),
             title: host.name,
-            detail: hostDetail(host, isActive: isActive)
+            detail: hostDetail(host)
         ) {
             if isActive {
                 Image(systemName: "checkmark")
@@ -102,19 +102,20 @@ struct SettingsScreen: View {
         }
     }
 
-    private func hostDetail(_ host: BridgeHostConfig, isActive: Bool) -> String {
-        if isActive {
-            switch model.linkState {
+    /// 多连接常驻：每台主机都显示自己那条连接的实时状态，不再只有 active 有
+    private func hostDetail(_ host: BridgeHostConfig) -> String {
+        if let link = model.link(for: host.id) {
+            switch link.linkState {
             case .connected:
                 var parts = ["在线"]
-                if let ms = model.latencyMs { parts.append("\(ms)ms") }
-                if let path = model.linkPath { parts.append(path.label) }
-                parts.append("\(model.sessions.count) 个会话")
+                if let ms = link.latencyMs { parts.append("\(ms)ms") }
+                if let path = link.linkPath { parts.append(path.label) }
+                parts.append("\(link.sessions.count) 个会话")
                 return parts.joined(separator: " · ")
             case .connecting:
                 return "连接中…"
             case .disconnected, .failed:
-                return "未连接"
+                break
             }
         }
         if let last = host.lastConnectedAt {
@@ -357,18 +358,15 @@ private struct AddComputerSheet: View {
 
             LCButton(title: "保存", kind: .primary) {
                 guard let port else { return }
-                let hadActive = model.hosts.active != nil
-                model.hosts.add(
+                let config = model.hosts.add(
                     name: name.trimmingCharacters(in: .whitespaces),
                     host: host.trimmingCharacters(in: .whitespaces),
                     port: port,
                     token: token
                 )
                 dismiss()
-                // 第一台电脑保存即连；后加的不打断当前连接，用户自己切
-                if !hadActive {
-                    Task { await model.connect() }
-                }
+                // 多连接常驻：新主机保存即入列连接，不打断其他主机的连接
+                Task { await model.connectHost(config.id) }
             }
             .disabled(!isComplete)
             .opacity(isComplete ? 1 : 0.5)

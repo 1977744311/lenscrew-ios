@@ -3,9 +3,10 @@ import LensCrewCore
 import SwiftUI
 
 /// 屏 2 · 会话流水：压缩导航头 + 按块样式渲染的流水 + 底部 composer。
+/// 用 (hostID, sessionID) 复合键寻址，所有动作路由到会话所属主机。
 struct SessionScreen: View {
     let model: CrewViewModel
-    let sessionID: String
+    let sessionKey: SessionKey
     @Environment(\.dismiss) private var dismiss
     @State private var draft = ""
     @State private var expandedReasoning: Set<String> = []
@@ -13,7 +14,7 @@ struct SessionScreen: View {
     @State private var presentedApproval: ApprovalPresentation?
 
     private var state: SessionState? {
-        model.sessions.first { $0.session.id == sessionID }
+        model.sessionState(for: sessionKey)
     }
 
     private var pendingIDs: [String] {
@@ -142,7 +143,7 @@ struct SessionScreen: View {
     /// 块 + 轮次分隔线按锚点交错
     private func items(_ state: SessionState) -> [TranscriptItem] {
         let markers = Dictionary(
-            grouping: model.turnMarkers[sessionID] ?? [], by: \.afterBlockID
+            grouping: model.turnMarkers(for: sessionKey), by: \.afterBlockID
         )
         var result: [TranscriptItem] = []
         for block in state.blocks {
@@ -542,7 +543,7 @@ struct SessionScreen: View {
               let approval = state.pendingApprovals.first(where: { $0.id == id })
         else { return }
         presentedApproval = ApprovalPresentation(
-            sessionID: sessionID,
+            sessionKey: sessionKey,
             sessionTitle: state.session.title,
             agent: state.session.agent,
             approval: approval
@@ -553,7 +554,7 @@ struct SessionScreen: View {
         let running = state.session.status == .running
         let draftEmpty = draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         return HStack(spacing: 8) {
-            if let mode = model.sessionModes[sessionID] {
+            if let mode = model.sessionMode(for: sessionKey) {
                 LCChip(fontSize: 11.5) {
                     Text(mode == .plan ? "计划 · 只读" : "默认")
                 }
@@ -565,7 +566,7 @@ struct SessionScreen: View {
             // 运行中且没在打字 → 中断钮；其余情况 → 发送钮（运行中也可排队）
             if running, draftEmpty {
                 Button {
-                    Task { await model.interrupt(sessionID) }
+                    Task { await model.interrupt(sessionKey) }
                 } label: {
                     Image(systemName: "square.fill")
                         .font(.system(size: 12))
@@ -579,7 +580,7 @@ struct SessionScreen: View {
                 Button {
                     let text = draft
                     draft = ""
-                    Task { await model.send(text, to: sessionID) }
+                    Task { await model.send(text, to: sessionKey) }
                 } label: {
                     Image(systemName: "arrow.up")
                         .font(.system(size: 15, weight: .bold))

@@ -68,8 +68,9 @@ final class PushCoordinator: NSObject {
     static let shared = PushCoordinator()
 
     private weak var model: CrewViewModel?
-    /// 冷启动时通知回调可能先于 UI 就绪，深链和 token 先攒着等 attach 冲账
-    private var pendingRoute: String?
+    /// 冷启动时通知回调可能先于 UI 就绪，深链和 token 先攒着等 attach 冲账。
+    /// macDeviceId 留给 VM 映射成 hostID（映射不到落聚焦主机）。
+    private var pendingRoute: (sessionID: String, macDeviceId: String?)?
     private var pendingTokenHex: String?
 
     private override init() {
@@ -93,7 +94,7 @@ final class PushCoordinator: NSObject {
         }
         if let route = pendingRoute {
             pendingRoute = nil
-            model.routeToSession(route)
+            model.routeToSession(route.sessionID, macDeviceId: route.macDeviceId)
         }
     }
 
@@ -140,7 +141,7 @@ final class PushCoordinator: NSObject {
     /// 不在这里硬造弹卡路径。
     fileprivate func routeFromTap(payload: LensCrewPushPayload) {
         guard let sessionId = payload.sessionId else { return }
-        route(sessionId)
+        route(sessionId, macDeviceId: payload.macDeviceId)
     }
 
     /// 锁屏 action 的后台裁决：独立短连接直达目标主机，不碰主连接的状态机——
@@ -149,7 +150,7 @@ final class PushCoordinator: NSObject {
         guard let sessionId = payload.sessionId else { return }
         guard let approvalId = payload.approvalId, let optionId else {
             // optionId/approvalId 缺席（bridge 版本差）→ 深链兜底，进 App 手动裁决
-            route(sessionId)
+            route(sessionId, macDeviceId: payload.macDeviceId)
             return
         }
         let store = model?.hosts ?? HostStore()
@@ -161,7 +162,7 @@ final class PushCoordinator: NSObject {
             let publicKey = store.macIdentityPublicKey(for: host.id)
         else {
             // manual 主机没有 E2EE 通道，深链兜底
-            route(sessionId)
+            route(sessionId, macDeviceId: payload.macDeviceId)
             return
         }
         let endpoints = host.pairedEndpoints(macIdentityPublicKey: publicKey).map(\.endpoint)
@@ -178,15 +179,15 @@ final class PushCoordinator: NSObject {
         }
         if !delivered {
             // 没送达就把人引到会话页补救，而不是让裁决无声蒸发
-            route(sessionId)
+            route(sessionId, macDeviceId: payload.macDeviceId)
         }
     }
 
-    private func route(_ sessionID: String) {
+    private func route(_ sessionID: String, macDeviceId: String?) {
         if let model {
-            model.routeToSession(sessionID)
+            model.routeToSession(sessionID, macDeviceId: macDeviceId)
         } else {
-            pendingRoute = sessionID
+            pendingRoute = (sessionID, macDeviceId)
         }
     }
 }
