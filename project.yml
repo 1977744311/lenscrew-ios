@@ -1,0 +1,50 @@
+# XcodeGen 工程定义：`xcodegen generate` 产出 LensCrew.xcodeproj
+# App target 挂真实 MWDAT；库层（LensCrewKit）零第三方依赖，swift test 不经过这里。
+name: LensCrew
+options:
+  bundleIdPrefix: dev.steven
+  deploymentTarget:
+    iOS: "17.0"
+packages:
+  LensCrewKit:
+    path: .
+  MWDAT:
+    url: https://github.com/facebook/meta-wearables-dat-ios
+    from: 0.8.0
+targets:
+  LensCrew:
+    type: application
+    platform: iOS
+    sources:
+      - App
+    dependencies:
+      - package: LensCrewKit
+        products:
+          - AgentProtocol
+          - BridgeLink
+          - GlassesKit
+          - GlassRenderer
+          - LensCrewCore
+      - package: MWDAT
+        products:
+          - MWDATCore
+          - MWDATDisplay
+          - MWDATMockDevice
+    info:
+      path: App/Support/Info.plist
+      properties:
+        UILaunchScreen: {}
+        NSBluetoothAlwaysUsageDescription: 连接 Meta Ray-Ban Display 眼镜需要蓝牙。
+        NSLocalNetworkUsageDescription: 连接同一网络下 Mac 上的 LensCrew bridge 需要访问本地网络。
+        # bridge 跑在局域网里，用明文 HTTP；ATS 只对本地网络放行，公网仍然强制 TLS
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        MWDAT:
+          DAMEnabled: true
+    settings:
+      base:
+        SWIFT_VERSION: "6.0"
+        TARGETED_DEVICE_FAMILY: "1"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait

@@ -23,12 +23,12 @@ public enum GlassButtonStyle: String, Sendable, Codable {
     case primary, secondary, outline
 }
 
-/// 只收录 0.8.0 图标目录里确实存在的名字。缺失的语义（例如"agent 正在思考"）
-/// 用现有图标近似，近似关系写在 App 侧适配器里，本层不做假设。
+/// 名字逐个对照 0.8.0 的 116 项图标目录核过（MWDATDisplay.swiftinterface 的 IconName），
+/// 所以 App 侧适配器是零近似的 1:1 映射。要加新图标先回去核目录，不要凭直觉起名。
 public enum GlassIconName: String, Sendable, Codable {
-    case checkmarkCircle, xmarkCircle, exclamationTriangle
-    case arrowLeft, arrowRight, arrowClockwise
-    case terminal, doc, gear, bell, clock
+    case checkmarkCircle, x, exclamationTriangle, exclamationCircle
+    case arrowLeft, arrowRight, twoArrowsClockwise
+    case code, pencilSquare, gear, bell, clock
 }
 
 public indirect enum GlassNode: Sendable, Equatable, Codable {
