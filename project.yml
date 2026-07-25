@@ -39,6 +39,11 @@ targets:
       # 手表 app 随 iOS app 分发（Embed Watch Content）
       - target: LensCrewWatch
         embed: true
+    # MWDAT 凭据经 xcconfig 注入，真实值放 gitignored 的 Secrets.xcconfig；
+    # 缺省空值也能构建（见 Base.xcconfig 注释）
+    configFiles:
+      Debug: App/Support/Base.xcconfig
+      Release: App/Support/Base.xcconfig
     # APNs：审批/轮次推送。真机收推送还需要开发者账号签名，构建本身不依赖
     entitlements:
       path: App/Support/LensCrew.entitlements
@@ -56,8 +61,12 @@ targets:
           NSAllowsLocalNetworking: true
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
+        # 眼镜使用者自建时填自己的 Meta 凭据（见 docs/glasses-self-build.md）；
+        # 占位来自 Base.xcconfig，空值时 DAT 配置失败但 App 照常启动
         MWDAT:
           DAMEnabled: true
+          MetaAppID: $(MWDAT_META_APP_ID)
+          ClientToken: $(MWDAT_CLIENT_TOKEN)
     settings:
       base:
         SWIFT_VERSION: "6.0"

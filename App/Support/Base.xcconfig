@@ -1,0 +1,14 @@
+// LensCrew iOS 构建基配置。
+//
+// MWDAT 凭据默认留空——没有 Meta 眼镜配置也能编译运行：模拟器走 Mock 眼镜，
+// 真机上眼镜功能保持休眠，手机端其余功能全部可用。要接眼镜就把
+// Secrets.example.xcconfig 复制成同目录的 Secrets.xcconfig 并填入你在 Meta
+// Wearables Developer Center 申请到的凭据（Secrets.xcconfig 已被 .gitignore 排除）。
+//
+// 顺序要紧：先给出空默认值，再可选包含 Secrets.xcconfig 覆盖——
+// 这样没有 Secrets.xcconfig 时这两个 build setting 仍有定义（空串），
+// Info.plist 里的 $(MWDAT_META_APP_ID) 展开为空而不是未定义。
+MWDAT_META_APP_ID =
+MWDAT_CLIENT_TOKEN =
+
+#include? "Secrets.xcconfig"
