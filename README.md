@@ -31,6 +31,7 @@
 
 ## Roadmap
 
+- 电脑端既有会话的发现与接管：把 Mac 上不经 LensCrew 开的 agent 会话也纳入指挥台——三家历史都在本地（codex `~/.codex/sessions/` rollout、claude `~/.claude/projects/` jsonl、`cursor-agent ls`），bridge 就地枚举出列表，手机上一键续接；codex / cursor 续接自带历史回放，claude 需解析其 jsonl 渲染历史（Cursor IDE 图形界面的聊天存于私有 SQLite，不在此列）
 - Claude / Cursor 账号额度：两家目前都没有程序化通道（Claude 的 stream-json 只给 token 用量，Cursor ACP 的 usage_update 是上下文占用而非额度），待上游暴露再接
 - 历史分页：codex resume 现在整段回放，超长会话应按页懒加载更早的历史
 - 真机验证：眼镜依赖 Meta Wearables Developer Center 注册与固件 / Meta AI App 版本（见 [眼镜自建](docs/glasses-self-build.md)）；手表 app group 与 APNs 推送在真机上需要开发者账号签名
