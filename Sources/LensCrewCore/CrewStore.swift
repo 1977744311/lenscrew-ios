@@ -38,6 +38,12 @@ public struct CrewStore: Sendable, Equatable {
         order.compactMap { sessions[$0] }
     }
 
+    /// 只清客户端侧的记录——bridge 重启后已不认识的残留会话用
+    public mutating func removeSession(_ sessionID: String) {
+        sessions[sessionID] = nil
+        order.removeAll { $0 == sessionID }
+    }
+
     @discardableResult
     public mutating func apply(_ event: BridgeEvent) -> ApplyOutcome {
         if case let .sessionCreated(seq, session) = event {
@@ -74,7 +80,10 @@ public struct CrewStore: Sendable, Equatable {
             state.session.status = status
 
         case .sessionClosed:
-            state.session.status = .ended
+            // 会话已从 bridge 移除，列表里留一行"已结束"的尸体只会误导
+            sessions[state.session.id] = nil
+            order.removeAll { $0 == state.session.id }
+            return .applied
 
         case let .blockAppended(_, _, block):
             state.blocks.append(block)

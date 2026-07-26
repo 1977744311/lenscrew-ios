@@ -441,6 +441,22 @@ final class CrewViewModel {
         }
     }
 
+    /// 关闭会话。bridge 认识就正常关（sessionClosed 会把它从列表撤掉）；
+    /// bridge 重启后不认识的残留（"未知会话"）只清客户端侧
+    func closeSession(_ key: SessionKey) async {
+        guard let coordinator = links[key.hostID]?.coordinator else {
+            lastError = "还没连上 bridge"
+            return
+        }
+        do {
+            try await coordinator.closeSession(key.sessionID)
+            lastError = nil
+        } catch {
+            await coordinator.dropSession(key.sessionID)
+            lastError = nil
+        }
+    }
+
     func send(_ text: String, to key: SessionKey) async {
         await run(on: key.hostID) { try await $0.sendMessage(text, to: key.sessionID) }
     }

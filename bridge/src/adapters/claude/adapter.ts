@@ -171,7 +171,8 @@ export class ClaudeAdapter implements AgentAdapter {
       this.child = null;
       this.failAllPending(new Error("claude 进程已退出"));
       if (this.closing) {
-        this.emit({ type: "status", status: "ended" });
+        // 主动 close 的状态语义由 hub 决定，这里报 ended 会把 bridge 重启
+        // （即将恢复的会话）误播成已结束
         return;
       }
       const reason = stderrTail.trim();

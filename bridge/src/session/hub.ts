@@ -229,7 +229,14 @@ export class SessionHub {
       case "closeSession": {
         const record = this.#require(command.sessionId);
         await record.adapter.close();
-        this.#emit(record, { type: "status", status: "ended" });
+        // sessionClosed 是"从列表移除"的信号；只发 ended 的话客户端会把
+        // 死会话一直留在列表里
+        this.#publish(record, {
+          type: "sessionClosed",
+          seq: ++record.seq,
+          sessionId: command.sessionId,
+          reason: "closed by client",
+        });
         this.#sessions.delete(command.sessionId);
         // 用户主动关掉的会话不再随重启还魂
         this.#persist();

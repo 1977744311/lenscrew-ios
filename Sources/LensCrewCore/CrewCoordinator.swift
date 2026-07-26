@@ -96,6 +96,12 @@ public actor CrewCoordinator {
         try await bridge.send(.closeSession(sessionID: sessionID))
     }
 
+    /// 只清客户端侧的残留（bridge 已不认识这个会话时用），并推一份新快照
+    public func dropSession(_ sessionID: String) async {
+        store.removeSession(sessionID)
+        await renderToGlasses()
+    }
+
     /// 手机上裁决审批。和眼镜上点按走同一条路：都不做乐观关闭，
     /// 等 bridge 的 approvalSettled 回来才撤卡，否则两块屏会显示互相矛盾的状态。
     public func resolveApproval(

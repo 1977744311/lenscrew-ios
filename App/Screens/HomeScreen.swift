@@ -253,6 +253,15 @@ struct HomeScreen: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityIdentifier("home.sessionCard")
+                        .contextMenu {
+                            // 关会话 = 结束 agent 进程并从列表移除；
+                            // bridge 重启后不认识的残留行也从这里清掉
+                            Button(role: .destructive) {
+                                Task { await model.closeSession(item.key) }
+                            } label: {
+                                Label("关闭会话", systemImage: "xmark.circle")
+                            }
+                        }
                     }
                 }
                 .background(LC.elev, in: RoundedRectangle(cornerRadius: 20))

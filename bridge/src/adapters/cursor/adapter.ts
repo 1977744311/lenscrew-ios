@@ -255,7 +255,8 @@ export class CursorAdapter implements AgentAdapter {
     }
     this.#failPending("adapter 已关闭");
     this.#pendingApprovals.clear();
-    this.#emit({ type: "status", status: "ended" });
+    // 不在这里报 ended：主动 close 的语义（用户关会话 vs bridge 重启前收尾）
+    // 只有 hub 知道——bridge 重启时误报 ended 会让客户端把活会话标成已结束
   }
 
   // MARK: - ACP

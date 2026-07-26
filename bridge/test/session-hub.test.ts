@@ -425,12 +425,15 @@ test("未知会话的指令报错而不是静默丢弃", async () => {
   );
 });
 
-test("关闭会话后从列表移除", async () => {
-  const { hub, adapters } = makeHub();
+test("关闭会话后从列表移除，并广播 sessionClosed 让客户端撤掉这行", async () => {
+  const { hub, events, adapters } = makeHub();
   await openSession(hub);
   await hub.handle({ type: "closeSession", sessionId: "s-1" });
   assert.deepEqual(hub.listSessions(), []);
   assert.ok(adapters[0]!.calls.includes("close"));
+  const closed = events.find((event) => event.type === "sessionClosed");
+  assert.ok(closed?.type === "sessionClosed");
+  assert.equal(closed.sessionId, "s-1");
 });
 
 test("adapter 启动失败作为致命错误上报，而不是让会话僵在启动中", async () => {
