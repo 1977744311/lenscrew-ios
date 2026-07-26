@@ -130,13 +130,15 @@ struct ContractFixtureTests {
         let encoder = JSONEncoder()
         // createSession 的 modeId 是 `string | null`，键必须始终存在
         let create = ClientCommand.createSession(
-            agent: .codex, workspaceRoot: "/tmp/ws", model: nil, modeID: "auto"
+            agent: .codex, workspaceRoot: "/tmp/ws", model: nil, modeID: "auto",
+            reasoningEffort: "xhigh"
         )
         let createObject = try #require(
             JSONSerialization.jsonObject(with: try encoder.encode(create)) as? [String: Any]
         )
         #expect(createObject["type"] as? String == "createSession")
         #expect(createObject["modeId"] as? String == "auto")
+        #expect(createObject["reasoningEffort"] as? String == "xhigh")
         #expect(createObject["model"] is NSNull)
 
         let setMode = ClientCommand.setSessionMode(sessionID: "s-001", modeID: "full")

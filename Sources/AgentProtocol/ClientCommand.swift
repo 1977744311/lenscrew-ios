@@ -6,7 +6,8 @@ public enum ClientCommand: Sendable, Equatable {
     case listSessions
     /// modeID 见 SessionModeOption.id；nil 用 adapter 的缺省档
     case createSession(
-        agent: AgentKind, workspaceRoot: String, model: String?, modeID: String?
+        agent: AgentKind, workspaceRoot: String, model: String?, modeID: String?,
+        reasoningEffort: String?
     )
     case resumeSession(agent: AgentKind, nativeID: String, workspaceRoot: String)
     case sendMessage(sessionID: String, text: String)
@@ -16,14 +17,16 @@ public enum ClientCommand: Sendable, Equatable {
     case setSessionMode(sessionID: String, modeID: String)
     /// 会话中切换模型；codex 下一轮 turn 生效，claude/cursor 即时生效
     case setSessionModel(sessionID: String, modelID: String)
+    /// 会话中切换推理档（仅 codex）；下一轮 turn 生效
+    case setSessionReasoningEffort(sessionID: String, effort: String)
     case closeSession(sessionID: String)
     case subscribe(sessionID: String, fromSeq: Int)
 }
 
 extension ClientCommand: Codable {
     private enum CodingKeys: String, CodingKey {
-        case type, agent, workspaceRoot, model, modeId, modelId, nativeId
-        case sessionId, text, approvalId, optionId, fromSeq
+        case type, agent, workspaceRoot, model, modeId, modelId, reasoningEffort, effort
+        case nativeId, sessionId, text, approvalId, optionId, fromSeq
     }
 
     public init(from decoder: any Decoder) throws {
@@ -37,7 +40,9 @@ extension ClientCommand: Codable {
                 agent: try container.decode(AgentKind.self, forKey: .agent),
                 workspaceRoot: try container.decode(String.self, forKey: .workspaceRoot),
                 model: try container.decodeIfPresent(String.self, forKey: .model),
-                modeID: try container.decodeIfPresent(String.self, forKey: .modeId)
+                modeID: try container.decodeIfPresent(String.self, forKey: .modeId),
+                reasoningEffort: try container.decodeIfPresent(
+                    String.self, forKey: .reasoningEffort)
             )
         case "resumeSession":
             self = .resumeSession(
@@ -70,6 +75,11 @@ extension ClientCommand: Codable {
                 sessionID: try container.decode(String.self, forKey: .sessionId),
                 modelID: try container.decode(String.self, forKey: .modelId)
             )
+        case "setSessionReasoningEffort":
+            self = .setSessionReasoningEffort(
+                sessionID: try container.decode(String.self, forKey: .sessionId),
+                effort: try container.decode(String.self, forKey: .effort)
+            )
         case "closeSession":
             self = .closeSession(
                 sessionID: try container.decode(String.self, forKey: .sessionId)
@@ -92,12 +102,13 @@ extension ClientCommand: Codable {
         switch self {
         case .listSessions:
             try container.encode("listSessions", forKey: .type)
-        case let .createSession(agent, workspaceRoot, model, modeID):
+        case let .createSession(agent, workspaceRoot, model, modeID, reasoningEffort):
             try container.encode("createSession", forKey: .type)
             try container.encode(agent, forKey: .agent)
             try container.encode(workspaceRoot, forKey: .workspaceRoot)
             try container.encode(model, forKey: .model)
             try container.encode(modeID, forKey: .modeId)
+            try container.encode(reasoningEffort, forKey: .reasoningEffort)
         case let .resumeSession(agent, nativeID, workspaceRoot):
             try container.encode("resumeSession", forKey: .type)
             try container.encode(agent, forKey: .agent)
@@ -123,6 +134,10 @@ extension ClientCommand: Codable {
             try container.encode("setSessionModel", forKey: .type)
             try container.encode(sessionID, forKey: .sessionId)
             try container.encode(modelID, forKey: .modelId)
+        case let .setSessionReasoningEffort(sessionID, effort):
+            try container.encode("setSessionReasoningEffort", forKey: .type)
+            try container.encode(sessionID, forKey: .sessionId)
+            try container.encode(effort, forKey: .effort)
         case let .closeSession(sessionID):
             try container.encode("closeSession", forKey: .type)
             try container.encode(sessionID, forKey: .sessionId)

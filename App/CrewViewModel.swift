@@ -407,11 +407,12 @@ final class CrewViewModel {
 
     func createSession(
         agent: AgentKind, workspaceRoot: String, modeID: String?, modelID: String?,
-        on hostID: UUID
+        reasoningEffort: String?, on hostID: UUID
     ) async {
         let sent = await run(on: hostID) {
             try await $0.createSession(
-                agent: agent, workspaceRoot: workspaceRoot, model: modelID, modeID: modeID
+                agent: agent, workspaceRoot: workspaceRoot, model: modelID, modeID: modeID,
+                reasoningEffort: reasoningEffort
             )
         }
         if sent {
@@ -430,6 +431,13 @@ final class CrewViewModel {
     func setSessionModel(_ key: SessionKey, modelID: String) async {
         await run(on: key.hostID) {
             try await $0.setSessionModel(key.sessionID, modelID: modelID)
+        }
+    }
+
+    /// 切换推理档（仅 codex 有档位）
+    func setSessionReasoningEffort(_ key: SessionKey, effort: String) async {
+        await run(on: key.hostID) {
+            try await $0.setSessionReasoningEffort(key.sessionID, effort: effort)
         }
     }
 

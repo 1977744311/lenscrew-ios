@@ -20,7 +20,7 @@ private func makeSession(id: String, updatedAtMs: Int64) -> AgentSession {
             approvals: true, steering: true, interrupt: true,
             planMode: true, resume: true, streamingDeltas: true
         ),
-        modeId: nil, modes: [], models: [],
+        modeId: nil, modes: [], models: [], reasoningEffort: nil,
         createdAtMs: 0, updatedAtMs: updatedAtMs
     )
 }

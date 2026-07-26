@@ -107,6 +107,7 @@ export class SessionHub {
         record.workspaceRoot,
         record.model,
         record.modeId,
+        null,
         record.nativeId,
       );
       if (!outcome.ok) {
@@ -168,6 +169,7 @@ export class SessionHub {
           command.workspaceRoot,
           command.model,
           command.modeId,
+          command.reasoningEffort,
           null,
         );
         return;
@@ -176,6 +178,7 @@ export class SessionHub {
         await this.#open(
           command.agent,
           command.workspaceRoot,
+          null,
           null,
           null,
           command.nativeId,
@@ -214,6 +217,12 @@ export class SessionHub {
         const record = this.#require(command.sessionId);
         // 生效后经 modelResolved 回显，快照统一刷新
         await record.adapter.setModel(command.modelId);
+        return;
+      }
+
+      case "setSessionReasoningEffort": {
+        const record = this.#require(command.sessionId);
+        await record.adapter.setReasoningEffort(command.effort);
         return;
       }
 
@@ -264,6 +273,7 @@ export class SessionHub {
     workspaceRoot: string,
     model: string | null,
     modeId: string | null,
+    reasoningEffort: string | null,
     resumeNativeId: string | null,
   ): Promise<{ id: string; ok: boolean }> {
     // 先定 id 再造 adapter：sink 要按 id 回查记录，而记录要用 adapter 的 capabilities。
@@ -288,6 +298,7 @@ export class SessionHub {
         modes: adapter.modes,
         // 模型清单全靠运行时自陈（modelsResolved），没有静态表可给
         models: [],
+        reasoningEffort,
         createdAtMs: now,
         updatedAtMs: now,
       },
@@ -302,7 +313,7 @@ export class SessionHub {
       if (stats === null || !stats.isDirectory()) {
         throw new Error(`工作目录不存在：${workspaceRoot}`);
       }
-      await adapter.start({ workspaceRoot, model, modeId, resumeNativeId });
+      await adapter.start({ workspaceRoot, model, modeId, reasoningEffort, resumeNativeId });
       // sessionCreated 必须早于 start()，否则启动期间的事件没有会话可归属；
       // 但真实能力要 start() 之后才确定，所以这里补一次快照修正它。
       this.#emit(record, { type: "capabilitiesResolved" });
@@ -367,7 +378,8 @@ export class SessionHub {
       event.type === "capabilitiesResolved" ||
       event.type === "modeResolved" ||
       event.type === "modesResolved" ||
-      event.type === "modelsResolved"
+      event.type === "modelsResolved" ||
+      event.type === "reasoningEffortResolved"
     ) {
       if (event.type === "nativeIdAssigned") record.session.nativeId = event.nativeId;
       if (event.type === "modelResolved") record.session.model = event.model;
@@ -375,6 +387,7 @@ export class SessionHub {
       if (event.type === "modeResolved") record.session.modeId = event.modeId;
       if (event.type === "modesResolved") record.session.modes = event.modes;
       if (event.type === "modelsResolved") record.session.models = event.models;
+      if (event.type === "reasoningEffortResolved") record.session.reasoningEffort = event.effort;
       record.session.capabilities = record.adapter.capabilities;
       // 路由表随元数据走：nativeId 到手、模式切换都要反映到下次重启的恢复里
       this.#persist();

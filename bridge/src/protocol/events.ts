@@ -61,6 +61,12 @@ export interface SessionModeOption {
 export interface SessionModelOption {
   id: string;
   label: string;
+  /**
+   * 该模型支持的推理档（codex 的 model/list 自陈，如 low/medium/high/xhigh）。
+   * 空数组表示不支持推理档选择——cursor 的档位编死在模型 id 的参数里
+   * （实测 set_config_option 拒绝自定义参数组合），claude 没有档位概念。
+   */
+  reasoningEfforts: string[];
 }
 
 export interface AgentSession {
@@ -84,6 +90,8 @@ export interface AgentSession {
   modes: SessionModeOption[];
   /** 本会话可切换的模型清单（运行时自陈）；空数组表示不支持切换 */
   models: SessionModelOption[];
+  /** 当前推理档；null 表示跟随 CLI 默认或运行时无档位概念 */
+  reasoningEffort: string | null;
   createdAtMs: number;
   updatedAtMs: number;
 }
@@ -342,6 +350,8 @@ export type ClientCommand =
       model: string | null;
       /** 见 SessionModeOption.id；null 用 adapter 的缺省档 */
       modeId: string | null;
+      /** 推理档；null 跟随 CLI 默认（仅 codex 有档位概念） */
+      reasoningEffort: string | null;
     }
   | {
       type: "resumeSession";
@@ -361,5 +371,7 @@ export type ClientCommand =
   | { type: "setSessionMode"; sessionId: string; modeId: string }
   /** 会话中切换模型；codex 下一轮 turn 生效，claude/cursor 即时生效 */
   | { type: "setSessionModel"; sessionId: string; modelId: string }
+  /** 会话中切换推理档；codex 下一轮 turn 生效（仅 codex 支持） */
+  | { type: "setSessionReasoningEffort"; sessionId: string; effort: string }
   | { type: "closeSession"; sessionId: string }
   | { type: "subscribe"; sessionId: string; fromSeq: number };

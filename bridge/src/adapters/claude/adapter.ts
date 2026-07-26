@@ -195,7 +195,10 @@ export class ClaudeAdapter implements AgentAdapter {
     // initialize 应答自陈可用模型，手机端的模型切换菜单靠它
     const models = (initResult?.models ?? []).flatMap((entry) => {
       if (typeof entry.value !== "string" || entry.value === "") return [];
-      return [{ id: entry.value, label: entry.displayName ?? entry.value }];
+      // claude 没有推理档概念（思考深度自适应），context 变体已是独立模型 id
+      return [
+        { id: entry.value, label: entry.displayName ?? entry.value, reasoningEfforts: [] },
+      ];
     });
     if (models.length > 0) this.emit({ type: "modelsResolved", models });
   }
@@ -242,6 +245,10 @@ export class ClaudeAdapter implements AgentAdapter {
   async setModel(modelId: string): Promise<void> {
     await this.sendControlRequest({ subtype: "set_model", model: modelId });
     this.emit({ type: "modelResolved", model: modelId });
+  }
+
+  async setReasoningEffort(): Promise<void> {
+    throw new Error("claude 没有推理档概念（思考深度由模型自适应）");
   }
 
   private validateMode(modeId: string): string {

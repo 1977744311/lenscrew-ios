@@ -73,6 +73,10 @@ class FakeAdapter implements AgentAdapter {
     this.calls.push(`setModel:${modelId}`);
     this.sink({ type: "modelResolved", model: modelId });
   }
+  async setReasoningEffort(effort: string): Promise<void> {
+    this.calls.push(`setEffort:${effort}`);
+    this.sink({ type: "reasoningEffortResolved", effort });
+  }
   async close(): Promise<void> {
     this.calls.push("close");
   }
@@ -101,6 +105,7 @@ async function openSession(hub: SessionHub): Promise<void> {
     workspaceRoot: tmpdir(),
     model: null,
     modeId: null,
+    reasoningEffort: null,
   });
 }
 
@@ -112,6 +117,7 @@ test("工作目录不存在时给人话错误，不去拉起 adapter", async () 
     workspaceRoot: "/no/such/dir-lenscrew-test",
     model: null,
     modeId: null,
+    reasoningEffort: null,
   });
 
   const failure = events.find((event) => event.type === "bridgeError");
@@ -154,6 +160,7 @@ test("会话路由表随 nativeId 落盘，关会话即从持久化删除", asyn
     workspaceRoot: tmpdir(),
     model: null,
     modeId: "full",
+    reasoningEffort: null,
   });
   // nativeId 还没到手，无从续接，不落盘
   assert.deepEqual(saved(), []);
@@ -235,8 +242,8 @@ test("setSessionModel 派发到 adapter，回显与清单都进快照", async ()
   adapters[0]!.sink({
     type: "modelsResolved",
     models: [
-      { id: "m-fast", label: "Fast" },
-      { id: "m-max", label: "Max" },
+      { id: "m-fast", label: "Fast", reasoningEfforts: [] },
+      { id: "m-max", label: "Max", reasoningEfforts: ["low", "high"] },
     ],
   });
   await hub.handle({ type: "setSessionModel", sessionId: "s-1", modelId: "m-max" });

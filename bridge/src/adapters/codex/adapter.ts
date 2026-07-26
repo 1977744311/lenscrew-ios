@@ -107,6 +107,8 @@ export class CodexAdapter implements AgentAdapter {
   #modeId: string = CODEX_DEFAULT_MODE;
   /** null 表示跟随 CLI 默认；setModel 之后每轮 turn 随 override 下发 */
   #model: string | null = null;
+  /** null 表示跟随 CLI 默认（用户 config 的 model_reasoning_effort） */
+  #effort: string | null = null;
   #closing = false;
 
   constructor(options: CodexAdapterOptions) {
@@ -166,9 +168,19 @@ export class CodexAdapter implements AgentAdapter {
             id?: string;
             displayName?: string;
             hidden?: boolean;
+            supportedReasoningEfforts?: Array<{ reasoningEffort?: string }>;
           };
           if (typeof record.id !== "string" || record.hidden === true) return [];
-          return [{ id: record.id, label: record.displayName ?? record.id }];
+          const efforts = (record.supportedReasoningEfforts ?? []).flatMap((item) =>
+            typeof item.reasoningEffort === "string" ? [item.reasoningEffort] : [],
+          );
+          return [
+            {
+              id: record.id,
+              label: record.displayName ?? record.id,
+              reasoningEfforts: efforts,
+            },
+          ];
         });
         if (models.length > 0) this.#sink({ type: "modelsResolved", models });
       })
@@ -176,6 +188,7 @@ export class CodexAdapter implements AgentAdapter {
 
     this.#modeId = this.#validateMode(options.modeId ?? CODEX_DEFAULT_MODE);
     this.#model = options.model;
+    this.#effort = options.reasoningEffort;
     const { approvalPolicy, sandbox } = this.#policyFor(this.#modeId);
     if (options.resumeNativeId !== null) {
       const params: CodexThreadResumeParams = {
@@ -190,8 +203,14 @@ export class CodexAdapter implements AgentAdapter {
           id?: string;
           turns?: Array<{ items?: unknown[] }>;
         };
+        reasoningEffort?: string;
       };
       this.#threadId = result.thread?.id ?? options.resumeNativeId;
+      // [实测] resume 响应带线程当前的推理档，回显给客户端
+      if (typeof result.reasoningEffort === "string" && this.#effort === null) {
+        this.#effort = result.reasoningEffort;
+        this.#sink({ type: "reasoningEffortResolved", effort: result.reasoningEffort });
+      }
       // [实测 2026-07-26] resume 响应的 thread.turns[].items 携带完整历史，
       // 形态与 item/completed 通知一致——合成同名消息喂 normalizer 即可回放，
       // 它对没见过 started 的 item 会直接补 blockAppended，不需要新的翻译路径
@@ -257,6 +276,7 @@ export class CodexAdapter implements AgentAdapter {
       sandboxPolicy: turnSandboxPolicy(sandbox),
     };
     if (this.#model !== null) params.model = this.#model;
+    if (this.#effort !== null) params.effort = this.#effort;
     await this.#request("turn/start", params);
   }
 
@@ -273,6 +293,12 @@ export class CodexAdapter implements AgentAdapter {
   async setModel(modelId: string): Promise<void> {
     this.#model = modelId;
     this.#sink({ type: "modelResolved", model: modelId });
+  }
+
+  /** 推理档同理（schema："Override the reasoning effort for this turn and subsequent turns"） */
+  async setReasoningEffort(effort: string): Promise<void> {
+    this.#effort = effort;
+    this.#sink({ type: "reasoningEffortResolved", effort });
   }
 
   async interrupt(): Promise<void> {

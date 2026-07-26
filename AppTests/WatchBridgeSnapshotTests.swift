@@ -16,7 +16,7 @@ private func makeApprovalItem(
     let session = AgentSession(
         id: "s-\(ordinal)", agent: .codex, nativeId: nil, workspaceRoot: "/tmp/x",
         title: "会话 \(ordinal)", model: nil, status: .awaitingApproval,
-        capabilities: capabilities, modeId: nil, modes: [], models: [],
+        capabilities: capabilities, modeId: nil, modes: [], models: [], reasoningEffort: nil,
         createdAtMs: 0, updatedAtMs: Int64(ordinal)
     )
     let approval = ApprovalRequest(
@@ -38,7 +38,7 @@ private func makeAggregatedSession(
         session: AgentSession(
             id: "s-\(ordinal)", agent: .claude, nativeId: nil, workspaceRoot: "/tmp/x",
             title: "会话 \(ordinal)", model: nil, status: .running,
-            capabilities: capabilities, modeId: nil, modes: [], models: [],
+            capabilities: capabilities, modeId: nil, modes: [], models: [], reasoningEffort: nil,
         createdAtMs: 0, updatedAtMs: Int64(ordinal)
         )
     )

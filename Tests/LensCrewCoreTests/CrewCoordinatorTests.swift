@@ -21,7 +21,7 @@ struct CrewCoordinatorTests {
         AgentSession(
             id: id, agent: .codex, nativeId: "t1", workspaceRoot: "/tmp",
             title: "修登录", model: nil, status: .running,
-            capabilities: capabilities, modeId: nil, modes: [], models: [],
+            capabilities: capabilities, modeId: nil, modes: [], models: [], reasoningEffort: nil,
             createdAtMs: 0, updatedAtMs: 0
         )
     }

@@ -135,7 +135,7 @@ struct EndToEndTests {
         try await connection.send(
             .createSession(
                 agent: .codex, workspaceRoot: "/tmp",
-                model: nil, modeID: nil
+                model: nil, modeID: nil, reasoningEffort: nil
             )
         )
         #expect(
@@ -216,7 +216,7 @@ struct EndToEndTests {
         try await connection.send(
             .createSession(
                 agent: .codex, workspaceRoot: "/tmp",
-                model: nil, modeID: nil
+                model: nil, modeID: nil, reasoningEffort: nil
             )
         )
         #expect(await waitUntil({ await !coordinator.sessions.isEmpty }))
@@ -265,7 +265,7 @@ struct EndToEndTests {
         try await connection.send(
             .createSession(
                 agent: .codex, workspaceRoot: "/tmp",
-                model: nil, modeID: nil
+                model: nil, modeID: nil, reasoningEffort: nil
             )
         )
         #expect(await waitUntil(timeout: .seconds(10)) { await !log.events.isEmpty })
@@ -291,7 +291,7 @@ struct EndToEndTests {
         try await connection.send(
             .createSession(
                 agent: .codex, workspaceRoot: "/tmp",
-                model: nil, modeID: nil
+                model: nil, modeID: nil, reasoningEffort: nil
             )
         )
         #expect(

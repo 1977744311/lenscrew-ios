@@ -507,6 +507,8 @@ export interface CodexTurnStartParams {
   approvalPolicy?: CodexAskForApproval;
   sandboxPolicy?: CodexTurnSandboxPolicy;
   model?: string;
+  /** 推理档（model/list 自陈的取值，如 low/medium/high/xhigh） */
+  effort?: string;
 }
 
 /** expectedTurnId 对不上会被拒，所以 adapter 必须自己盯住当前 turnId */

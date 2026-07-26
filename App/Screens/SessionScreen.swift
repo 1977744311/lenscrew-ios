@@ -133,13 +133,34 @@ struct SessionScreen: View {
     }
 
     /// 模型名：单行截断（cursor 的模型 id 自带参数很长，不截会把导航头挤成三行）；
-    /// 会话自陈了模型清单时可点切换——codex 下一轮生效，claude/cursor 即时生效
+    /// 会话自陈了模型清单时可点切换——codex 下一轮生效，claude/cursor 即时生效。
+    /// codex 的推理档挂在同一个菜单里（当前模型自陈支持的档位），显示为 "模型 · 档"。
     @ViewBuilder
     private func modelLabel(_ state: SessionState) -> some View {
         if let modelID = state.session.model {
-            let display = state.session.models.first { $0.id == modelID }?.label ?? modelID
-            if state.session.models.count > 1 {
+            let current = state.session.models.first { $0.id == modelID }
+            let effortSuffix = state.session.reasoningEffort.map { " · \($0)" } ?? ""
+            let display = (current?.label ?? modelID) + effortSuffix
+            if state.session.models.count > 1 || !(current?.reasoningEfforts.isEmpty ?? true) {
                 Menu {
+                    if let efforts = current?.reasoningEfforts, !efforts.isEmpty {
+                        Section("推理程度") {
+                            ForEach(efforts, id: \.self) { effort in
+                                Button {
+                                    Task {
+                                        await model.setSessionReasoningEffort(
+                                            sessionKey, effort: effort)
+                                    }
+                                } label: {
+                                    if effort == state.session.reasoningEffort {
+                                        Label(effort, systemImage: "checkmark")
+                                    } else {
+                                        Text(effort)
+                                    }
+                                }
+                            }
+                        }
+                    }
                     Section("会话模型") {
                         ForEach(state.session.models) { option in
                             Button {

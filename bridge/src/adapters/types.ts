@@ -51,6 +51,8 @@ export type AdapterEvent =
   | { type: "modesResolved"; modes: SessionModeOption[] }
   /** 运行时自陈的可用模型清单（claude init / cursor session/new / codex model/list） */
   | { type: "modelsResolved"; models: SessionModelOption[] }
+  /** 运行时回显的当前推理档（codex 的 thread/resume 响应或切换后自发） */
+  | { type: "reasoningEffortResolved"; effort: string }
   | { type: "error"; message: string; fatal: boolean };
 
 /**
@@ -73,6 +75,8 @@ export interface AdapterStartOptions {
   model: string | null;
   /** 见 SessionModeOption.id；null 用 adapter 的缺省档 */
   modeId: string | null;
+  /** 推理档；null 跟随 CLI 默认（仅 codex 消费） */
+  reasoningEffort: string | null;
   /** 续接已有会话；null 表示开新会话 */
   resumeNativeId: string | null;
 }
@@ -116,6 +120,8 @@ export interface AgentAdapter {
   setMode(modeId: string): Promise<void>;
   /** 会话中切换模型。生效后 adapter 发 `modelResolved` 回显 */
   setModel(modelId: string): Promise<void>;
+  /** 会话中切换推理档。不支持档位的运行时抛错说明原因 */
+  setReasoningEffort(effort: string): Promise<void>;
   close(): Promise<void>;
 }
 

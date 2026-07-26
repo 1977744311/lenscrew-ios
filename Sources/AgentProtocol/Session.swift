@@ -56,10 +56,13 @@ public struct SessionModeOption: Sendable, Equatable, Codable, Identifiable {
 public struct SessionModelOption: Sendable, Equatable, Codable, Identifiable {
     public var id: String
     public var label: String
+    /// 该模型支持的推理档（codex 自陈）；空数组表示不支持档位选择
+    public var reasoningEfforts: [String]
 
-    public init(id: String, label: String) {
+    public init(id: String, label: String, reasoningEfforts: [String]) {
         self.id = id
         self.label = label
+        self.reasoningEfforts = reasoningEfforts
     }
 }
 
@@ -79,6 +82,8 @@ public struct AgentSession: Sendable, Equatable, Codable, Identifiable {
     public var modes: [SessionModeOption]
     /// 本会话可切换的模型清单（运行时自陈）；空数组表示不支持切换
     public var models: [SessionModelOption]
+    /// 当前推理档；nil 表示跟随 CLI 默认或运行时无档位概念
+    public var reasoningEffort: String?
     public var createdAtMs: Int64
     public var updatedAtMs: Int64
 
@@ -86,7 +91,8 @@ public struct AgentSession: Sendable, Equatable, Codable, Identifiable {
         id: String, agent: AgentKind, nativeId: String?, workspaceRoot: String,
         title: String, model: String?, status: SessionStatus,
         capabilities: AgentCapabilities, modeId: String?, modes: [SessionModeOption],
-        models: [SessionModelOption], createdAtMs: Int64, updatedAtMs: Int64
+        models: [SessionModelOption], reasoningEffort: String?,
+        createdAtMs: Int64, updatedAtMs: Int64
     ) {
         self.id = id
         self.agent = agent
@@ -99,6 +105,7 @@ public struct AgentSession: Sendable, Equatable, Codable, Identifiable {
         self.modeId = modeId
         self.modes = modes
         self.models = models
+        self.reasoningEffort = reasoningEffort
         self.createdAtMs = createdAtMs
         self.updatedAtMs = updatedAtMs
     }
@@ -118,6 +125,7 @@ public struct AgentSession: Sendable, Equatable, Codable, Identifiable {
         try container.encode(modeId, forKey: .modeId)
         try container.encode(modes, forKey: .modes)
         try container.encode(models, forKey: .models)
+        try container.encode(reasoningEffort, forKey: .reasoningEffort)
         try container.encode(createdAtMs, forKey: .createdAtMs)
         try container.encode(updatedAtMs, forKey: .updatedAtMs)
     }

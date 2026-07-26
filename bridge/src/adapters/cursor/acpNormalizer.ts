@@ -439,9 +439,11 @@ export class CursorAcpNormalizer implements ProtocolNormalizer<AcpWireMessage> {
       if (availableModels !== undefined && availableModels.length > 0) {
         events.push({
           type: "modelsResolved",
+          // 档位/上下文编死在官方模型 id 的参数里，没有独立的档位维度
           models: availableModels.map((entry) => ({
             id: entry.modelId,
             label: entry.name ?? entry.modelId,
+            reasoningEfforts: [],
           })),
         });
       }

@@ -231,6 +231,12 @@ export class CursorAdapter implements AgentAdapter {
     this.#emit({ type: "modelResolved", model: modelId });
   }
 
+  async setReasoningEffort(): Promise<void> {
+    // [实测] set_config_option 拒绝自定义参数组合（"Invalid model value"），
+    // acp 进程级 --model 也被忽略——档位编死在官方模型 id 的参数里
+    throw new Error("cursor 的推理档编在模型参数里，请直接切换带对应参数的模型");
+  }
+
   #validateMode(modeId: string): string {
     if (!this.#modes.some((mode) => mode.id === modeId)) {
       const valid = this.#modes.map((mode) => mode.id).join(", ");

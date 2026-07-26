@@ -21,6 +21,7 @@
       "modeId": null,
       "modes": [],
       "models": [],
+      "reasoningEffort": null,
       "createdAtMs": 1784985600000,
       "updatedAtMs": 1784985600000
     }
@@ -60,13 +61,21 @@
       "models": [
         {
           "id": "gpt-5.6-terra",
-          "label": "GPT-5.6-Terra"
+          "label": "GPT-5.6-Terra",
+          "reasoningEfforts": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ]
         },
         {
           "id": "gpt-5.6-sol",
-          "label": "GPT-5.6-Sol"
+          "label": "GPT-5.6-Sol",
+          "reasoningEfforts": []
         }
       ],
+      "reasoningEffort": "high",
       "createdAtMs": 1784985600000,
       "updatedAtMs": 1784985600500
     }

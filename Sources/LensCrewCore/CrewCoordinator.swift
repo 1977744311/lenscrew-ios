@@ -58,11 +58,12 @@ public actor CrewCoordinator {
 
     public func createSession(
         agent: AgentKind, workspaceRoot: String,
-        model: String? = nil, modeID: String? = nil
+        model: String? = nil, modeID: String? = nil, reasoningEffort: String? = nil
     ) async throws {
         try await bridge.send(
             .createSession(
-                agent: agent, workspaceRoot: workspaceRoot, model: model, modeID: modeID
+                agent: agent, workspaceRoot: workspaceRoot, model: model, modeID: modeID,
+                reasoningEffort: reasoningEffort
             )
         )
     }
@@ -79,6 +80,12 @@ public actor CrewCoordinator {
     /// 切换会话模型；生效以 bridge 回推的 sessionUpdated（model 变化）为准
     public func setSessionModel(_ sessionID: String, modelID: String) async throws {
         try await bridge.send(.setSessionModel(sessionID: sessionID, modelID: modelID))
+    }
+
+    /// 切换推理档（仅 codex）；生效以 sessionUpdated（reasoningEffort 变化）为准
+    public func setSessionReasoningEffort(_ sessionID: String, effort: String) async throws {
+        try await bridge.send(
+            .setSessionReasoningEffort(sessionID: sessionID, effort: effort))
     }
 
     public func interrupt(_ sessionID: String) async throws {

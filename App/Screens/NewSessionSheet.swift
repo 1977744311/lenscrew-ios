@@ -16,6 +16,8 @@ struct NewSessionSheet: View {
     @State private var modeID: String?
     /// nil = 跟随 CLI 默认模型
     @State private var modelID: String?
+    /// nil = 跟随 CLI 默认推理档（仅所选模型自陈支持档位时展示）
+    @State private var reasoningEffort: String?
     @FocusState private var customRootFocused: Bool
 
     private var effectiveModeID: String {
@@ -30,6 +32,12 @@ struct NewSessionSheet: View {
             .filter { $0.session.agent == agent && !$0.session.models.isEmpty }
             .max { $0.session.updatedAtMs < $1.session.updatedAtMs }?
             .session.models ?? []
+    }
+
+    /// 所选模型自陈的推理档；未显式选模型时无从判断档位，不显示
+    private var availableEfforts: [String] {
+        guard let modelID else { return [] }
+        return availableModels.first { $0.id == modelID }?.reasoningEfforts ?? []
     }
 
     /// 生效的工作目录：行内输入优先于 MRU 选择
@@ -80,10 +88,11 @@ struct NewSessionSheet: View {
                 let root = effectiveRoot
                 let chosenMode = effectiveModeID
                 let chosenModel = modelID
+                let chosenEffort = reasoningEffort
                 Task {
                     await model.createSession(
                         agent: agent, workspaceRoot: root, modeID: chosenMode,
-                        modelID: chosenModel, on: target
+                        modelID: chosenModel, reasoningEffort: chosenEffort, on: target
                     )
                 }
                 dismiss()
@@ -109,6 +118,11 @@ struct NewSessionSheet: View {
                 self.modeID = nil
             }
             modelID = nil
+            reasoningEffort = nil
+        }
+        // 换模型后旧档位未必受支持，回到 CLI 默认
+        .onChange(of: modelID) { _, _ in
+            reasoningEffort = nil
         }
     }
 
@@ -381,7 +395,57 @@ struct NewSessionSheet: View {
                     .background(LC.elev, in: RoundedRectangle(cornerRadius: 20))
                 }
                 .accessibilityIdentifier("newSession.model")
+                effortRow
             }
+        }
+    }
+
+    /// 推理档：仅所选模型自陈支持时出现（codex）
+    @ViewBuilder
+    private var effortRow: some View {
+        let efforts = availableEfforts
+        if !efforts.isEmpty {
+            Menu {
+                Button {
+                    reasoningEffort = nil
+                } label: {
+                    if reasoningEffort == nil {
+                        Label("CLI 默认", systemImage: "checkmark")
+                    } else {
+                        Text("CLI 默认")
+                    }
+                }
+                Section {
+                    ForEach(efforts, id: \.self) { effort in
+                        Button {
+                            reasoningEffort = effort
+                        } label: {
+                            if reasoningEffort == effort {
+                                Label(effort, systemImage: "checkmark")
+                            } else {
+                                Text(effort)
+                            }
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 8) {
+                    Text("推理程度")
+                        .font(.system(size: 14))
+                        .foregroundStyle(LC.text2)
+                    Spacer()
+                    Text(reasoningEffort ?? "CLI 默认")
+                        .font(.system(size: 14))
+                        .foregroundStyle(LC.text)
+                    Image(systemName: "chevron.up.chevron.down")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(LC.text3)
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 13)
+                .background(LC.elev, in: RoundedRectangle(cornerRadius: 20))
+            }
+            .accessibilityIdentifier("newSession.effort")
         }
     }
 
