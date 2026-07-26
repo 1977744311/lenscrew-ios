@@ -165,9 +165,25 @@ export class CodexAdapter implements AgentAdapter {
       };
       if (options.model !== null) params.model = options.model;
       const result = (await this.#request("thread/resume", params)) as {
-        thread?: { id?: string };
+        thread?: {
+          id?: string;
+          turns?: Array<{ items?: unknown[] }>;
+        };
       };
       this.#threadId = result.thread?.id ?? options.resumeNativeId;
+      // [实测 2026-07-26] resume 响应的 thread.turns[].items 携带完整历史，
+      // 形态与 item/completed 通知一致——合成同名消息喂 normalizer 即可回放，
+      // 它对没见过 started 的 item 会直接补 blockAppended，不需要新的翻译路径
+      for (const turn of result.thread?.turns ?? []) {
+        for (const item of turn.items ?? []) {
+          const events = this.#normalizer.normalize({
+            jsonrpc: "2.0",
+            method: "item/completed",
+            params: { item },
+          } as CodexIncomingMessage);
+          for (const event of events) this.#sink(event);
+        }
+      }
     } else {
       const params: CodexThreadStartParams = {
         cwd: options.workspaceRoot,

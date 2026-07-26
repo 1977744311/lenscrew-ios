@@ -1,13 +1,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { SessionHub } from "../src/session/hub.ts";
-import type { AdapterEvent, AgentAdapter, AdapterEventSink } from "../src/adapters/types.ts";
+import { SessionHub, type SessionPersistence } from "../src/session/hub.ts";
+import type {
+  AdapterEvent,
+  AdapterStartOptions,
+  AgentAdapter,
+  AdapterEventSink,
+} from "../src/adapters/types.ts";
 import type {
   AgentCapabilities,
   BridgeEvent,
   SessionModeOption,
 } from "../src/protocol/events.ts";
+import type { PersistedSession } from "../src/state/sessionStore.ts";
 
 const fullCapabilities: AgentCapabilities = {
   approvals: true,
@@ -32,14 +38,20 @@ class FakeAdapter implements AgentAdapter {
   currentModeId: string = "default";
   readonly sink: AdapterEventSink;
   readonly calls: string[] = [];
+  startOptions: AdapterStartOptions | null = null;
 
   constructor(sink: AdapterEventSink, capabilities: AgentCapabilities = fullCapabilities) {
     this.sink = sink;
     this.capabilities = capabilities;
   }
 
-  async start(): Promise<void> {
+  async start(options: AdapterStartOptions): Promise<void> {
+    this.startOptions = options;
     this.calls.push("start");
+    // 恢复失败路径的注入口：resume 一个标记为坏的 nativeId 就抛
+    if (options.resumeNativeId === "native-broken") {
+      throw new Error("rollout 不存在");
+    }
     this.sink({ type: "status", status: "running" });
   }
   async sendMessage(text: string): Promise<void> {
@@ -86,6 +98,93 @@ async function openSession(hub: SessionHub): Promise<void> {
     modeId: null,
   });
 }
+
+/** 数组顶替文件的持久化，测试直接断言内容 */
+function memoryPersistence(initial: PersistedSession[] = []): {
+  persistence: SessionPersistence;
+  saved: () => PersistedSession[];
+} {
+  let stored = initial;
+  return {
+    persistence: {
+      load: () => stored,
+      save: (sessions) => {
+        stored = sessions;
+      },
+    },
+    saved: () => stored,
+  };
+}
+
+test("会话路由表随 nativeId 落盘，关会话即从持久化删除", async () => {
+  const { persistence, saved } = memoryPersistence();
+  const adapters: FakeAdapter[] = [];
+  const hub = new SessionHub((_kind, sink) => {
+    const adapter = new FakeAdapter(sink);
+    adapters.push(adapter);
+    return adapter;
+  }, persistence);
+
+  await hub.handle({
+    type: "createSession",
+    agent: "codex",
+    workspaceRoot: "/Users/dev/project",
+    model: null,
+    modeId: "full",
+  });
+  // nativeId 还没到手，无从续接，不落盘
+  assert.deepEqual(saved(), []);
+
+  adapters[0]!.sink({ type: "nativeIdAssigned", nativeId: "thread-1" });
+  assert.equal(saved().length, 1);
+  assert.equal(saved()[0]!.nativeId, "thread-1");
+  assert.equal(saved()[0]!.workspaceRoot, "/Users/dev/project");
+  assert.equal(saved()[0]!.modeId, "full");
+
+  await hub.handle({ type: "closeSession", sessionId: "s-1" });
+  assert.deepEqual(saved(), []);
+});
+
+test("restorePersisted 逐条续接，失败的条目清除且不留僵尸会话", async () => {
+  const { persistence, saved } = memoryPersistence([
+    {
+      agent: "codex",
+      nativeId: "native-good",
+      workspaceRoot: "/Users/dev/project",
+      model: null,
+      modeId: "full",
+      updatedAtMs: 1,
+    },
+    {
+      agent: "codex",
+      nativeId: "native-broken",
+      workspaceRoot: "/Users/dev/other",
+      model: null,
+      modeId: null,
+      updatedAtMs: 2,
+    },
+  ]);
+  const adapters: FakeAdapter[] = [];
+  const hub = new SessionHub((_kind, sink) => {
+    const adapter = new FakeAdapter(sink);
+    adapters.push(adapter);
+    return adapter;
+  }, persistence);
+
+  await hub.restorePersisted();
+
+  // 成功的续上：resume 参数原样传给 adapter，模式还原
+  const sessions = hub.listSessions();
+  assert.equal(sessions.length, 1);
+  assert.equal(sessions[0]!.nativeId, "native-good");
+  assert.equal(sessions[0]!.modeId, "full");
+  assert.equal(adapters[0]!.startOptions?.resumeNativeId, "native-good");
+  assert.equal(adapters[0]!.startOptions?.modeId, "full");
+
+  // 失败的不留僵尸，持久化里也只剩活着的
+  assert.equal(saved().length, 1);
+  assert.equal(saved()[0]!.nativeId, "native-good");
+});
 
 test("setSessionMode 派发到 adapter，回显后快照携带新模式", async () => {
   const { hub, events, adapters } = makeHub();
@@ -154,8 +253,8 @@ test("start 之后补一次快照，把修正后的 capabilities 发出去", asy
     // 建会话时自称不支持审批，start() 之后才发现支持
     const adapter = new FakeAdapter(sink, { ...fullCapabilities, approvals: false });
     const originalStart = adapter.start.bind(adapter);
-    adapter.start = async () => {
-      await originalStart();
+    adapter.start = async (options: AdapterStartOptions) => {
+      await originalStart(options);
       adapter.capabilities = { ...adapter.capabilities, approvals: true };
     };
     adapters.push(adapter);

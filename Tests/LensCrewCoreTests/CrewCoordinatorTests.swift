@@ -44,6 +44,22 @@ struct CrewCoordinatorTests {
         await glasses.sentPayloads.last?.canonicalJSON
     }
 
+    @Test("接入补发的合成快照触发流水回放，真实创建不触发")
+    func syntheticSnapshotPullsReplayWindow() async throws {
+        let bridge = MockBridgeConnection()
+        let glasses = MockGlassesSession()
+        let coordinator = CrewCoordinator(bridge: bridge, glasses: glasses)
+
+        // seq 0 = 接入补发：只有元数据，必须回头拉重放窗口，
+        // 否则冷启动的客户端看到"等你审批"却点不开任何东西
+        await coordinator.ingest(.sessionCreated(seq: 0, session: session("s1")))
+        #expect(bridge.commands.contains(.subscribe(sessionID: "s1", fromSeq: 1)))
+
+        // seq 1 = 真实创建：流水本来就会跟着来，不该多拉一轮
+        await coordinator.ingest(.sessionCreated(seq: 1, session: session("s2")))
+        #expect(!bridge.commands.contains(.subscribe(sessionID: "s2", fromSeq: 1)))
+    }
+
     @Test("审批到达时眼镜自动切到审批卡")
     func approvalPreemptsGlasses() async throws {
         let bridge = MockBridgeConnection()

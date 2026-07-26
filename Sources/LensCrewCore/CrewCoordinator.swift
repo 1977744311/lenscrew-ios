@@ -133,6 +133,14 @@ public actor CrewCoordinator {
             break
         }
 
+        // seq 0 的 sessionCreated 是接入补发的合成快照，只有元数据——流水与
+        // 待审批要靠重放窗口拉回来，否则冷启动的客户端会看到"等你审批"
+        // 却点不开任何东西。fromSeq 取 1 而不是 0：replay(0) 会再回一条
+        // seq 0 快照，那就循环了。
+        if case let .sessionCreated(seq, session) = event, seq == 0 {
+            try? await bridge.send(.subscribe(sessionID: session.id, fromSeq: 1))
+        }
+
         switch event {
         case let .approvalRequested(_, sessionID, approval):
             if autoPresentApprovals {

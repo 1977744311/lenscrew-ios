@@ -7,12 +7,19 @@ import type {
   QuotaWindow,
 } from "../protocol/events.ts";
 import type { AdapterEvent, AgentAdapter } from "../adapters/types.ts";
+import type { PersistedSession } from "../state/sessionStore.ts";
 
 export type AdapterFactory = (
   kind: AgentKind,
   sink: (event: AdapterEvent) => void,
 ) => AgentAdapter;
 export type BridgeEventListener = (event: BridgeEvent) => void;
+
+/** 会话路由表的落盘接口；传入即启用"重启后自动续接" */
+export interface SessionPersistence {
+  load(): PersistedSession[];
+  save(sessions: PersistedSession[]): void;
+}
 
 /**
  * 每个会话保留的事件上限。会话开久了流水会很长，无上限就是内存泄漏；
@@ -76,10 +83,35 @@ export class SessionHub {
   readonly #listeners = new Set<BridgeEventListener>();
   /** 账号级额度缓存，按 agent 各留最新一份；会话关了它也得活着 */
   readonly #quota = new Map<AgentKind, AgentQuotaSnapshot>();
+  readonly #persistence: SessionPersistence | null;
   #nextSessionOrdinal = 1;
 
-  constructor(makeAdapter: AdapterFactory) {
+  constructor(makeAdapter: AdapterFactory, persistence?: SessionPersistence) {
     this.#makeAdapter = makeAdapter;
+    this.#persistence = persistence ?? null;
+  }
+
+  /**
+   * 重启后把持久化的会话逐条续接回来。resume 失败（rollout 被清、CLI 换版本）
+   * 的条目直接丢弃——留着只会每次启动都无谓重试一遍。
+   * 不阻塞 listen：恢复期间接入的客户端会随 sessionCreated 陆续看到会话。
+   */
+  async restorePersisted(): Promise<void> {
+    const persisted = this.#persistence?.load() ?? [];
+    for (const record of persisted) {
+      const outcome = await this.#open(
+        record.agent,
+        record.workspaceRoot,
+        record.model,
+        record.modeId,
+        record.nativeId,
+      );
+      if (!outcome.ok) {
+        // 失败的恢复不留僵尸会话占位
+        this.#sessions.delete(outcome.id);
+      }
+    }
+    this.#persist();
   }
 
   onEvent(listener: BridgeEventListener): () => void {
@@ -180,6 +212,8 @@ export class SessionHub {
         await record.adapter.close();
         this.#emit(record, { type: "status", status: "ended" });
         this.#sessions.delete(command.sessionId);
+        // 用户主动关掉的会话不再随重启还魂
+        this.#persist();
         return;
       }
 
@@ -221,7 +255,7 @@ export class SessionHub {
     model: string | null,
     modeId: string | null,
     resumeNativeId: string | null,
-  ): Promise<void> {
+  ): Promise<{ id: string; ok: boolean }> {
     // 先定 id 再造 adapter：sink 要按 id 回查记录，而记录要用 adapter 的 capabilities。
     // sink 是惰性查表的，adapter 构造时记录还不存在也无妨。
     const id = `s-${this.#nextSessionOrdinal++}`;
@@ -254,12 +288,36 @@ export class SessionHub {
       // sessionCreated 必须早于 start()，否则启动期间的事件没有会话可归属；
       // 但真实能力要 start() 之后才确定，所以这里补一次快照修正它。
       this.#emit(record, { type: "capabilitiesResolved" });
+      return { id, ok: true };
     } catch (error) {
       this.#emit(record, {
         type: "error",
         message: error instanceof Error ? error.message : String(error),
         fatal: true,
       });
+      return { id, ok: false };
+    }
+  }
+
+  /** 把当前"可续接"的会话（有 nativeId 的）落盘；失败静默——持久化坏了不该挡会话 */
+  #persist(): void {
+    if (this.#persistence === null) return;
+    const records: PersistedSession[] = [];
+    for (const { session } of this.#sessions.values()) {
+      if (session.nativeId === null || session.status === "ended") continue;
+      records.push({
+        agent: session.agent,
+        nativeId: session.nativeId,
+        workspaceRoot: session.workspaceRoot,
+        model: session.model,
+        modeId: session.modeId,
+        updatedAtMs: session.updatedAtMs,
+      });
+    }
+    try {
+      this.#persistence.save(records);
+    } catch {
+      // 落盘失败只影响下次重启的恢复，不值得打断当前会话
     }
   }
 
@@ -298,6 +356,8 @@ export class SessionHub {
       if (event.type === "modeResolved") record.session.modeId = event.modeId;
       if (event.type === "modesResolved") record.session.modes = event.modes;
       record.session.capabilities = record.adapter.capabilities;
+      // 路由表随元数据走：nativeId 到手、模式切换都要反映到下次重启的恢复里
+      this.#persist();
       this.#publish(record, {
         type: "sessionUpdated",
         seq: ++record.seq,

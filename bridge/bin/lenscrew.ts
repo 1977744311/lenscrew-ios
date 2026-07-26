@@ -8,6 +8,7 @@ import { join } from "node:path";
 import { defaultAdapterFactory } from "../src/adapters/registry.ts";
 import { SessionHub } from "../src/session/hub.ts";
 import { startQuotaProbe } from "../src/session/quotaProbe.ts";
+import { loadPersistedSessions, savePersistedSessions } from "../src/state/sessionStore.ts";
 import { createBridgeServer } from "../src/transport/server.ts";
 import { createRelayServer } from "../src/relay/relayServer.ts";
 import { startRelayClient } from "../src/relay/relayClient.ts";
@@ -258,7 +259,10 @@ async function runUp(options: UpOptions): Promise<void> {
     },
   };
 
-  const hub = new SessionHub(defaultAdapterFactory);
+  const hub = new SessionHub(defaultAdapterFactory, {
+    load: () => loadPersistedSessions(stateDir),
+    save: (sessions) => savePersistedSessions(stateDir, sessions),
+  });
   const gateway = new SecureGateway({
     hub,
     identity,
@@ -306,6 +310,10 @@ async function runUp(options: UpOptions): Promise<void> {
     adminToken,
     pid: process.pid,
   });
+
+  // 上次没关掉的会话自动续接（原生会话都在各 CLI 的状态目录里，丢的只是路由表）。
+  // 不阻塞启动：恢复期间接入的客户端会随 sessionCreated 陆续看到会话。
+  void hub.restorePersisted();
 
   process.stdout.write(`  macDeviceId ${identity.macDeviceId}\n`);
   process.stdout.write(`  身份指纹 ${identityFingerprint(identity)}\n`);
