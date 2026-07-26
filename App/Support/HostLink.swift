@@ -209,8 +209,8 @@ final class HostLink: Identifiable {
         } else {
             try await connection.connect()
         }
-        // 已经在跑的会话要拉回来，否则手机重启后看不到 Mac 上的现场
-        try await connection.send(.listSessions)
+        // 已在跑的会话不用主动拉：SSE 与 E2EE 通道在接入时都会补发
+        // seq-0 快照，客户端拿到快照自会补拉重放窗口
         store.markConnected(host.id)
         reportError(nil)
     }

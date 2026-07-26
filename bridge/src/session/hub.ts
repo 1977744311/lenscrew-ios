@@ -158,8 +158,17 @@ export class SessionHub {
   async handle(command: ClientCommand): Promise<void> {
     switch (command.type) {
       case "listSessions":
+        // 广播 seq=0 的元数据快照，与各通道接入时的补发同一形状。
+        // 绝不能走 #emit：那会分配真 seq 并写进重放 log——客户端收到
+        // 非 0 seq 的 sessionCreated 会重建会话（流水清空），又因为
+        // seq != 0 不会再补拉重放窗口，流水就永远空了。
         for (const record of this.#sessions.values()) {
-          this.#emit(record, { type: "sessionCreated", session: record.session });
+          const event: BridgeEvent = {
+            type: "sessionCreated",
+            seq: 0,
+            session: snapshot(record.session),
+          };
+          for (const listener of this.#listeners) listener(event);
         }
         return;
 

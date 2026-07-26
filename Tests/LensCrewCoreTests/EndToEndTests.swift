@@ -198,6 +198,86 @@ struct EndToEndTests {
         await connection.disconnect()
     }
 
+    @Test("冷接入客户端靠 subscribe(fromSeq:1) 拉回既有会话的完整流水")
+    func coldAttachReplaysExistingTranscript() async throws {
+        let bridge = try BridgeProcess()
+        defer { bridge.stop() }
+
+        // 第一个客户端建会话并跑完一轮，然后离场
+        let first = HTTPBridgeConnection(endpoint: bridge.endpoint)
+        let firstLog = EventLog()
+        let firstCollector = Task {
+            for await event in first.events { await firstLog.append(event) }
+        }
+        try await first.connect()
+        try await first.send(
+            .createSession(
+                agent: .codex, workspaceRoot: "/tmp",
+                model: nil, modeID: nil, reasoningEffort: nil
+            )
+        )
+        try await first.send(.sendMessage(sessionID: "s-1", text: "你好"))
+        #expect(
+            await waitUntil({ await firstLog.contains { $0.type == .turnCompleted } }),
+            "首个客户端没等到轮次完成"
+        )
+        firstCollector.cancel()
+        await first.disconnect()
+
+        // 冷接入客户端：接入只有 seq-0 元数据快照，按 coordinator 的策略回发
+        // subscribe(fromSeq:1)，断言历史 block 真的回来了且能在 store 里重建
+        let second = HTTPBridgeConnection(endpoint: bridge.endpoint)
+        let secondLog = EventLog()
+        let secondCollector = Task {
+            for await event in second.events { await secondLog.append(event) }
+        }
+        defer { secondCollector.cancel() }
+        try await second.connect()
+        #expect(
+            await waitUntil({ await secondLog.contains { $0.type == .sessionCreated } }),
+            "冷接入没收到 seq-0 快照"
+        )
+        try await second.send(.subscribe(sessionID: "s-1", fromSeq: 1))
+        #expect(
+            await waitUntil({
+                await secondLog.contains {
+                    if case let .blockAppended(_, _, block) = $0,
+                       case .agentMessage = block { return true }
+                    return false
+                }
+            }),
+            "重放窗口没把历史 agentMessage 送回冷客户端"
+        )
+
+        var store = CrewStore()
+        for event in await secondLog.events {
+            let outcome = store.apply(event)
+            #expect(
+                outcome == .applied || outcome == .duplicate,
+                "冷接入事件 seq \(event.seq) 落库失败: \(outcome)"
+            )
+        }
+        let state = try #require(store.sessions["s-1"])
+        #expect(!state.blocks.isEmpty, "重放后 store 里流水仍为空")
+
+        // 回归：listSessions 只能广播 seq-0 快照。曾经它 emit 真 seq 的
+        // sessionCreated——客户端会重建会话（清空流水）且因 seq != 0
+        // 不再补拉，冷接入拉回的历史当场丢光
+        let countBefore = await secondLog.events.count
+        try await second.send(.listSessions)
+        #expect(
+            await waitUntil({ await secondLog.events.count > countBefore }),
+            "listSessions 没有触发快照广播"
+        )
+        for event in await secondLog.events.dropFirst(countBefore) {
+            if case let .sessionCreated(seq, _) = event {
+                #expect(seq == 0, "listSessions 广播的快照 seq 必须为 0，实际 \(seq)")
+            }
+        }
+
+        await second.disconnect()
+    }
+
     @Test("审批到达时眼镜屏真的收到了审批卡")
     func pushesApprovalCardToGlasses() async throws {
         let bridge = try BridgeProcess()

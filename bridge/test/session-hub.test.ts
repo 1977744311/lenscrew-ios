@@ -374,6 +374,25 @@ test("未知会话重放返回空而不是抛错", () => {
   assert.deepEqual(hub.replay("nope", 0), []);
 });
 
+test("listSessions 指令只广播 seq-0 快照，不污染重放窗口", async () => {
+  const { hub, events } = makeHub();
+  await openSession(hub);
+  const windowBefore = hub.replay("s-1", 0).map((event) => event.seq);
+
+  await hub.handle({ type: "listSessions" });
+
+  const snapshots = events.filter((event) => event.type === "sessionCreated");
+  const last = snapshots.at(-1)!;
+  assert.equal(last.seq, 0, "快照必须是 seq 0，客户端才会跟着补拉重放窗口");
+  // 曾经的实现走 #emit 分配真 seq 并写进 log：客户端收到非 0 seq 的
+  // sessionCreated 会重建会话（流水清空），又不会再补拉，流水永远空了
+  assert.deepEqual(
+    hub.replay("s-1", 0).map((event) => event.seq),
+    windowBefore,
+    "重放窗口不该混进 listSessions 的快照",
+  );
+});
+
 /** 静默吞掉会让手机端以为批准生效了 */
 test("adapter 不支持审批时，回送裁决必须报错", async () => {
   const { hub } = makeHub({ ...fullCapabilities, approvals: false });
