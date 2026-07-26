@@ -364,10 +364,13 @@ struct GitScreen: View {
                 HStack(spacing: 10) {
                     codeBadge(change.code)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(fileName(change.path))
-                            .font(.system(size: 13.5, weight: .medium))
-                            .foregroundStyle(LC.text)
-                            .lineLimit(1)
+                        HStack(spacing: 6) {
+                            Text(fileName(change.path))
+                                .font(.system(size: 13.5, weight: .medium))
+                                .foregroundStyle(LC.text)
+                                .lineLimit(1)
+                            lineCounts(change)
+                        }
                         Text(change.oldPath.map { "\($0) → \(change.path)" } ?? change.path)
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundStyle(LC.text3)
@@ -396,6 +399,19 @@ struct GitScreen: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 9)
         .accessibilityIdentifier("git.file.\(change.path)")
+    }
+
+    /// 体量一眼可见：AI 一轮改几十个文件时，用户靠这个决定先看哪个。
+    /// 拿不到（二进制/untracked/冲突）就不显示——显示 "+0 −0" 是在撒谎。
+    @ViewBuilder
+    private func lineCounts(_ change: GitFileChange) -> some View {
+        if let added = change.added, let removed = change.removed {
+            (Text("+\(added)").foregroundStyle(LC.green)
+                + Text(" −\(removed)").foregroundStyle(LC.red))
+                .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
+                .lineLimit(1)
+                .fixedSize()
+        }
     }
 
     private func iconAction(
@@ -597,7 +613,9 @@ struct GitScreen: View {
 // MARK: - diff sheet
 
 /// 单文件或整仓 diff，按行着色。手机上看 diff 是"确认 agent 改了什么"，
-/// 不是代码评审——超长 diff 由 bridge 截断并提示回 Mac 看全量。
+/// 不是代码评审。AI 一轮改动的 diff 动辄几千行，所以：
+/// 头部先给增删统计与截断提示（不用滚到底才发现），行按需分批渲染
+/// （滚多少渲多少，首屏不为万行 diff 买单），超长部分由 bridge 按行截断。
 struct GitDiffSheet: View {
     let model: CrewViewModel
     let route: GitRoute
@@ -605,14 +623,23 @@ struct GitDiffSheet: View {
     let staged: Bool
     @Environment(\.dismiss) private var dismiss
 
-    @State private var text: String?
+    @State private var lines: [String]?
+    @State private var additions = 0
+    @State private var deletions = 0
     @State private var truncated = false
     @State private var errorMessage: String?
+    /// 已渲染的行数上限，滚动触底时按页递增
+    @State private var visibleCount = GitDiffSheet.pageSize
+
+    private static let pageSize = 500
 
     var body: some View {
         VStack(spacing: 0) {
             header
             Divider().overlay(LC.line)
+            if truncated {
+                truncationNotice
+            }
             content
         }
         .background(LC.bg)
@@ -632,6 +659,12 @@ struct GitDiffSheet: View {
             LCChip(fontSize: 11) {
                 Text(staged ? "已暂存" : "工作区")
             }
+            if additions > 0 || deletions > 0 {
+                (Text("+\(additions)").foregroundStyle(LC.green)
+                    + Text(" −\(deletions)").foregroundStyle(LC.red))
+                    .font(.system(size: 12, weight: .semibold, design: .monospaced))
+                    .fixedSize()
+            }
             Spacer()
             Button {
                 dismiss()
@@ -648,6 +681,21 @@ struct GitDiffSheet: View {
         .padding(.vertical, 12)
     }
 
+    /// 截断提示放在头部：滚到底才发现"不全"是最糟的体验
+    private var truncationNotice: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "scissors")
+                .font(.system(size: 11))
+            Text("改动很大，只截取了前 256 KB，完整 diff 回 Mac 上看")
+                .font(.system(size: 12))
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(LC.orange)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(LC.orange.opacity(0.10))
+    }
+
     @ViewBuilder
     private var content: some View {
         if let errorMessage {
@@ -656,14 +704,14 @@ struct GitDiffSheet: View {
             } description: {
                 Text(errorMessage)
             }
-        } else if let text {
-            if text.isEmpty {
+        } else if let lines {
+            if lines.isEmpty {
                 ContentUnavailableView(
                     "没有差异", systemImage: "checkmark.circle",
                     description: Text(staged ? "暂存区与 HEAD 一致" : "工作区与暂存区一致")
                 )
             } else {
-                diffBody(text)
+                diffBody(lines)
             }
         } else {
             Spacer()
@@ -672,12 +720,12 @@ struct GitDiffSheet: View {
         }
     }
 
-    private func diffBody(_ text: String) -> some View {
+    private func diffBody(_ lines: [String]) -> some View {
         ScrollView([.vertical, .horizontal]) {
             LazyVStack(alignment: .leading, spacing: 0) {
-                let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
-                ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                    Text(String(line))
+                ForEach(Array(lines.prefix(visibleCount).enumerated()), id: \.offset) {
+                    _, line in
+                    Text(line.isEmpty ? " " : line)
                         .font(.system(size: 11.5, design: .monospaced))
                         .foregroundStyle(Self.lineColor(line))
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -685,11 +733,17 @@ struct GitDiffSheet: View {
                         .padding(.vertical, 0.5)
                         .background(Self.lineBackground(line))
                 }
-                if truncated {
-                    Text("diff 过长已截断，完整内容回 Mac 上看")
-                        .font(.system(size: 12))
-                        .foregroundStyle(LC.orange)
-                        .padding(14)
+                if visibleCount < lines.count {
+                    // 哨兵：滚到这儿就再放一页，不打断滚动也不一次全渲染
+                    HStack(spacing: 6) {
+                        ProgressView().tint(LC.text3).scaleEffect(0.7)
+                        Text("还有 \(lines.count - visibleCount) 行")
+                            .font(.system(size: 11.5))
+                            .foregroundStyle(LC.text3)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 10)
+                    .onAppear { visibleCount += Self.pageSize }
                 }
             }
             .padding(.vertical, 8)
@@ -698,7 +752,7 @@ struct GitDiffSheet: View {
     }
 
     /// 着色规则：hunk 头亮蓝、增绿删红、文件头次要色
-    static func lineColor(_ line: Substring) -> Color {
+    static func lineColor(_ line: String) -> Color {
         if line.hasPrefix("@@") { return LC.lightBlue }
         if line.hasPrefix("+++") || line.hasPrefix("---") { return LC.text2 }
         if line.hasPrefix("+") { return LC.green }
@@ -707,7 +761,7 @@ struct GitDiffSheet: View {
         return LC.text2
     }
 
-    static func lineBackground(_ line: Substring) -> Color {
+    static func lineBackground(_ line: String) -> Color {
         if line.hasPrefix("+++") || line.hasPrefix("---") { return .clear }
         if line.hasPrefix("+") { return LC.green.opacity(0.08) }
         if line.hasPrefix("-") { return LC.red.opacity(0.08) }
@@ -720,10 +774,24 @@ struct GitDiffSheet: View {
                 .diff(root: route.workspaceRoot, path: path, staged: staged),
                 on: route.hostID
             )
-            if case let .diff(body, wasTruncated) = outcome {
-                text = body
-                truncated = wasTruncated
+            guard case let .diff(body, wasTruncated) = outcome else { return }
+            // 分行与增删统计一次完成；bridge 已限流到 256KB，毫秒级
+            var split: [String] = []
+            var adds = 0
+            var dels = 0
+            for slice in body.split(separator: "\n", omittingEmptySubsequences: false) {
+                if slice.hasPrefix("+"), !slice.hasPrefix("+++") {
+                    adds += 1
+                } else if slice.hasPrefix("-"), !slice.hasPrefix("---") {
+                    dels += 1
+                }
+                split.append(String(slice))
             }
+            if split.last == "" { split.removeLast() }
+            lines = split
+            additions = adds
+            deletions = dels
+            truncated = wasTruncated
         } catch {
             errorMessage = describeBridgeError(error)
         }

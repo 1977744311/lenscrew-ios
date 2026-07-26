@@ -29,13 +29,19 @@ public struct GitFileChange: Sendable, Equatable, Codable, Identifiable {
     public var code: String
     /// rename/copy 的旧路径；其余为 nil
     public var oldPath: String?
+    /// 增删行数（numstat）。二进制、untracked、冲突文件拿不到时为 nil——
+    /// 填 0 会被读成"改了但没变化"（与 FileChangeSummary 同一原则）。
+    public var added: Int?
+    public var removed: Int?
 
     public var id: String { "\(code):\(path)" }
 
-    public init(path: String, code: String, oldPath: String?) {
+    public init(path: String, code: String, oldPath: String?, added: Int?, removed: Int?) {
         self.path = path
         self.code = code
         self.oldPath = oldPath
+        self.added = added
+        self.removed = removed
     }
 
     // TS 侧是 `string | null` 而非可选属性，键必须始终存在
@@ -44,6 +50,8 @@ public struct GitFileChange: Sendable, Equatable, Codable, Identifiable {
         try container.encode(path, forKey: .path)
         try container.encode(code, forKey: .code)
         try container.encode(oldPath, forKey: .oldPath)
+        try container.encode(added, forKey: .added)
+        try container.encode(removed, forKey: .removed)
     }
 }
 

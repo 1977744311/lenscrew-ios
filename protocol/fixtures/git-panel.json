@@ -26,13 +26,13 @@
         "ahead": 2,
         "behind": 1,
         "staged": [
-          { "path": "Sources/App/main.swift", "code": "M", "oldPath": null },
-          { "path": "Sources/App/Renamed.swift", "code": "R", "oldPath": "Sources/App/Original.swift" }
+          { "path": "Sources/App/main.swift", "code": "M", "oldPath": null, "added": 214, "removed": 36 },
+          { "path": "Sources/App/Renamed.swift", "code": "R", "oldPath": "Sources/App/Original.swift", "added": 0, "removed": 0 }
         ],
         "unstaged": [
-          { "path": "README.md", "code": "M", "oldPath": null },
-          { "path": "tmp/scratch.txt", "code": "?", "oldPath": null },
-          { "path": "Sources/App/Conflicted.swift", "code": "U", "oldPath": null }
+          { "path": "README.md", "code": "M", "oldPath": null, "added": 3, "removed": 1 },
+          { "path": "tmp/scratch.txt", "code": "?", "oldPath": null, "added": null, "removed": null },
+          { "path": "Sources/App/Conflicted.swift", "code": "U", "oldPath": null, "added": null, "removed": null }
         ],
         "stashCount": 1
       }

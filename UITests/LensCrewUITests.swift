@@ -145,6 +145,8 @@ final class LensCrewUITests: XCTestCase {
             "已暂存文件行缺席"
         )
         XCTAssertTrue(element(app, "git.file.README.md").exists, "工作区文件行缺席")
+        // 大改动场景的第一需求是体量概览：文件行必须带增删行数
+        XCTAssertTrue(app.staticTexts["+128 −43"].firstMatch.exists, "文件行没显示增删行数")
         XCTAssertTrue(element(app, "git.commit").exists, "提交按钮缺席")
 
         // 点工作区文件行 → diff sheet 展示夹具 diff 的内容

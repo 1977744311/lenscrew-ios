@@ -98,6 +98,8 @@ struct GitFixtureTests {
         #expect(changes.contains { $0["oldPath"] is NSNull })
         #expect(changes.contains { $0["oldPath"] is String })
         #expect(changes.contains { ($0["code"] as? String) == "?" })
+        #expect(changes.contains { $0["added"] is NSNull })
+        #expect(changes.contains { ($0["added"] as? Int) != nil })
 
         let branchOutcomes = fixture.outcomes.filter { ($0["kind"] as? String) == "branches" }
         #expect(branchOutcomes.contains { $0["current"] is NSNull })

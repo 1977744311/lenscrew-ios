@@ -69,7 +69,13 @@ function rebuildRequest(request: GitRequest): GitRequest {
 }
 
 function rebuildFileChange(value: GitFileChange): GitFileChange {
-  return { path: value.path, code: value.code, oldPath: value.oldPath };
+  return {
+    path: value.path,
+    code: value.code,
+    oldPath: value.oldPath,
+    added: value.added,
+    removed: value.removed,
+  };
 }
 
 function rebuildStatus(value: GitStatusSummary): GitStatusSummary {
@@ -167,6 +173,8 @@ test("git fixture 覆盖可空字段的两种形态", () => {
   assert.ok(changes.some((change) => change.oldPath === null));
   assert.ok(changes.some((change) => change.oldPath !== null));
   assert.ok(changes.some((change) => change.code === "?"));
+  assert.ok(changes.some((change) => change.added === null));
+  assert.ok(changes.some((change) => change.added !== null));
 
   const branches = fixture.outcomes.filter((outcome) => outcome.kind === "branches");
   assert.ok(branches.some((outcome) => outcome.current === null));

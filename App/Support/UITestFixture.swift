@@ -187,11 +187,20 @@ final class FixtureBridgeConnection: BridgeConnecting, @unchecked Sendable {
                 GitStatusSummary(
                     branch: Self.gitBranch, upstream: "origin/main", ahead: 1, behind: 0,
                     staged: [
-                        GitFileChange(path: Self.gitStagedPath, code: "M", oldPath: nil)
+                        GitFileChange(
+                            path: Self.gitStagedPath, code: "M", oldPath: nil,
+                            added: 128, removed: 43
+                        )
                     ],
                     unstaged: [
-                        GitFileChange(path: Self.gitUnstagedPath, code: "M", oldPath: nil),
-                        GitFileChange(path: Self.gitUntrackedPath, code: "?", oldPath: nil),
+                        GitFileChange(
+                            path: Self.gitUnstagedPath, code: "M", oldPath: nil,
+                            added: 3, removed: 1
+                        ),
+                        GitFileChange(
+                            path: Self.gitUntrackedPath, code: "?", oldPath: nil,
+                            added: nil, removed: nil
+                        ),
                     ],
                     stashCount: 1
                 ))

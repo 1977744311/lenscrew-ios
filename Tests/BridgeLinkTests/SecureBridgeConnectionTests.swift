@@ -438,7 +438,7 @@ struct SecureBridgeConnectionTests {
             let git = """
                 {"kind":"status","status":{"branch":"main","upstream":null,"ahead":null,\
                 "behind":null,"staged":[],"unstaged":[{"path":"README.md","code":"M",\
-                "oldPath":null}],"stashCount":0}}
+                "oldPath":null,"added":3,"removed":1}],"stashCount":0}}
                 """
             return ["{\"t\":\"reply\",\"id\":\(id),\"ok\":true,\"git\":\(git)}"]
         }
@@ -455,7 +455,11 @@ struct SecureBridgeConnectionTests {
                     GitStatusSummary(
                         branch: "main", upstream: nil, ahead: nil, behind: nil,
                         staged: [],
-                        unstaged: [GitFileChange(path: "README.md", code: "M", oldPath: nil)],
+                        unstaged: [
+                            GitFileChange(
+                                path: "README.md", code: "M", oldPath: nil, added: 3, removed: 1
+                            )
+                        ],
                         stashCount: 0
                     )))
 

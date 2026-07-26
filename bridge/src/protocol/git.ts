@@ -44,6 +44,13 @@ export interface GitFileChange {
   code: string;
   /** rename/copy 的旧路径；其余为 null */
   oldPath: string | null;
+  /**
+   * 增删行数（numstat）。AI 一轮改动动辄几十个文件，列表上没有体量
+   * 用户就不知道该先看哪个。二进制、untracked、冲突文件拿不到——
+   * 必须是 null，填 0 是在撒谎（与会话流水 FileChangeSummary 同一原则）。
+   */
+  added: number | null;
+  removed: number | null;
 }
 
 export interface GitStatusSummary {

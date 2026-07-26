@@ -75,13 +75,58 @@ export async function runGitRequest(request: GitRequest): Promise<GitOutcome> {
 // MARK: - 查询
 
 async function readStatus(root: string): Promise<GitStatusSummary> {
-  const [status, stash] = await Promise.all([
+  const [status, stash, stagedStat, worktreeStat] = await Promise.all([
     git(root, ["status", "--porcelain=v2", "--branch", "-z"]),
     git(root, ["stash", "list", "--format=%gd"]),
+    git(root, ["diff", "--cached", "--numstat", "-z"]),
+    git(root, ["diff", "--numstat", "-z"]),
   ]);
   const summary = parsePorcelainV2(status.stdout);
   summary.stashCount = stash.stdout.split("\n").filter((line) => line !== "").length;
+  // AI 一轮改动动辄几十个文件，列表上必须能看出体量，用户才知道先看哪个
+  applyNumstat(summary.staged, parseNumstat(stagedStat.stdout));
+  applyNumstat(summary.unstaged, parseNumstat(worktreeStat.stdout));
   return summary;
+}
+
+interface LineStat {
+  added: number | null;
+  removed: number | null;
+}
+
+/**
+ * numstat -z：`added\tremoved\tpath\0`；rename 的路径字段为空，
+ * 后跟 NUL 分隔的旧、新两个路径；二进制的行数是 "-"。
+ */
+function parseNumstat(stdout: string): Map<string, LineStat> {
+  const stats = new Map<string, LineStat>();
+  const tokens = stdout.split("\0");
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index] ?? "";
+    if (token === "") continue;
+    const fields = token.split("\t");
+    if (fields.length < 3) continue;
+    const added = fields[0] === "-" ? null : Number(fields[0]);
+    const removed = fields[1] === "-" ? null : Number(fields[1]);
+    let path = fields.slice(2).join("\t");
+    if (path === "") {
+      // rename 记录：跳过旧路径，按新路径记账（与 porcelain 的 path 对齐）
+      index += 2;
+      path = tokens[index] ?? "";
+    }
+    if (path !== "") stats.set(path, { added, removed });
+  }
+  return stats;
+}
+
+/** untracked 与冲突文件不在 numstat 里，保持 null——填 0 是在撒谎 */
+function applyNumstat(changes: GitFileChange[], stats: Map<string, LineStat>): void {
+  for (const change of changes) {
+    const stat = stats.get(change.path);
+    if (stat === undefined) continue;
+    change.added = stat.added;
+    change.removed = stat.removed;
+  }
 }
 
 /**
@@ -123,7 +168,7 @@ function parsePorcelainV2(stdout: string): GitStatusSummary {
 
     const type = token[0];
     if (type === "?") {
-      summary.unstaged.push({ path: token.slice(2), code: "?", oldPath: null });
+      summary.unstaged.push(fileChange(token.slice(2), "?", null));
       continue;
     }
     if (type !== "1" && type !== "2" && type !== "u") continue;
@@ -140,7 +185,7 @@ function parsePorcelainV2(stdout: string): GitStatusSummary {
     }
 
     if (type === "u") {
-      summary.unstaged.push({ path, code: "U", oldPath: null });
+      summary.unstaged.push(fileChange(path, "U", null));
       continue;
     }
     const x = xy[0] ?? ".";
@@ -156,7 +201,13 @@ function parsePorcelainV2(stdout: string): GitStatusSummary {
 }
 
 function fileChange(path: string, code: string, oldPath: string | null): GitFileChange {
-  return { path, code, oldPath: code === "R" || code === "C" ? oldPath : null };
+  return {
+    path,
+    code,
+    oldPath: code === "R" || code === "C" ? oldPath : null,
+    added: null,
+    removed: null,
+  };
 }
 
 async function readDiff(
@@ -189,7 +240,13 @@ async function readDiff(
 
 function clipDiff(text: string): { text: string; truncated: boolean } {
   if (text.length <= DIFF_LIMIT_CHARS) return { text, truncated: false };
-  return { text: text.slice(0, DIFF_LIMIT_CHARS), truncated: true };
+  // 截断落在行边界上：diff 是按行着色/对齐的，半行会被客户端渲染错
+  const slice = text.slice(0, DIFF_LIMIT_CHARS);
+  const lastNewline = slice.lastIndexOf("\n");
+  return {
+    text: lastNewline > 0 ? slice.slice(0, lastNewline + 1) : slice,
+    truncated: true,
+  };
 }
 
 const FIELD_SEP = "\x1f";

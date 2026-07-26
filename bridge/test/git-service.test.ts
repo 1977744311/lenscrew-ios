@@ -51,9 +51,9 @@ async function makeRepoWithCommit(): Promise<string> {
   return dir;
 }
 
-test("status：staged/unstaged/untracked 与 rename 各归其位", async () => {
+test("status：staged/unstaged/untracked 与 rename 各归其位，行数随 numstat 给出", async () => {
   const repo = await makeRepoWithCommit();
-  await writeFile(join(repo, "staged.txt"), "s\n");
+  await writeFile(join(repo, "staged.txt"), "s1\ns2\n");
   await sh(repo, "add", "staged.txt");
   await writeFile(join(repo, "README.md"), "# proj changed\n");
   await writeFile(join(repo, "loose.txt"), "l\n");
@@ -66,17 +66,17 @@ test("status：staged/unstaged/untracked 与 rename 各归其位", async () => {
   assert.equal(status.upstream, null);
   assert.equal(status.ahead, null);
   assert.equal(status.behind, null);
-  assert.deepEqual(status.staged, [{ path: "staged.txt", code: "A", oldPath: null }]);
-  assert.deepEqual(
-    status.unstaged.map((change) => [change.path, change.code]),
-    [
-      ["README.md", "M"],
-      ["loose.txt", "?"],
-    ],
-  );
+  assert.deepEqual(status.staged, [
+    { path: "staged.txt", code: "A", oldPath: null, added: 2, removed: 0 },
+  ]);
+  // AI 一轮改几十个文件是常态，列表必须能看出体量；untracked 拿不到就是 null
+  assert.deepEqual(status.unstaged, [
+    { path: "README.md", code: "M", oldPath: null, added: 1, removed: 1 },
+    { path: "loose.txt", code: "?", oldPath: null, added: null, removed: null },
+  ]);
 });
 
-test("status：staged rename 带旧路径", async () => {
+test("status：staged rename 带旧路径与 numstat 行数", async () => {
   const repo = await makeRepoWithCommit();
   await sh(repo, "mv", "README.md", "RENAMED.md");
 
@@ -84,7 +84,20 @@ test("status：staged rename 带旧路径", async () => {
   assert.equal(outcome.kind, "status");
   if (outcome.kind !== "status") return;
   assert.deepEqual(outcome.status.staged, [
-    { path: "RENAMED.md", code: "R", oldPath: "README.md" },
+    { path: "RENAMED.md", code: "R", oldPath: "README.md", added: 0, removed: 0 },
+  ]);
+});
+
+test("status：二进制文件行数为 null 而不是 0", async () => {
+  const repo = await makeRepoWithCommit();
+  await writeFile(join(repo, "blob.bin"), Buffer.from([0, 1, 2, 0, 3]));
+  await sh(repo, "add", "blob.bin");
+
+  const outcome = await runGitRequest({ op: "status", root: repo });
+  assert.equal(outcome.kind, "status");
+  if (outcome.kind !== "status") return;
+  assert.deepEqual(outcome.status.staged, [
+    { path: "blob.bin", code: "A", oldPath: null, added: null, removed: null },
   ]);
 });
 
@@ -96,7 +109,7 @@ test("status：含空格与中文的路径不会被转义搞坏", async () => {
   assert.equal(outcome.kind, "status");
   if (outcome.kind !== "status") return;
   assert.deepEqual(outcome.status.unstaged, [
-    { path: "带 空格 的文件.txt", code: "?", oldPath: null },
+    { path: "带 空格 的文件.txt", code: "?", oldPath: null, added: null, removed: null },
   ]);
 });
 
@@ -153,16 +166,20 @@ test("diff：工作区、暂存区与 untracked 文件三条路都出内容", as
   assert.match(untracked.text, /\+brand new/);
 });
 
-test("diff：超限截断并打标", async () => {
+test("diff：超限截断打标，且截断点落在行边界不切半行", async () => {
   const repo = await makeRepoWithCommit();
-  await writeFile(join(repo, "big.txt"), `${"x".repeat(400 * 1024)}\n`);
+  // AI 大改动的典型形态：一个文件里成千上万行新增
+  const lines = Array.from({ length: 20_000 }, (_, i) => `line ${i} ${"x".repeat(20)}`);
+  await writeFile(join(repo, "big.txt"), `${lines.join("\n")}\n`);
   await sh(repo, "add", "big.txt");
 
   const outcome = await runGitRequest({ op: "diff", root: repo, path: null, staged: true });
   assert.equal(outcome.kind, "diff");
   if (outcome.kind !== "diff") return;
   assert.equal(outcome.truncated, true);
-  assert.equal(outcome.text.length, 256 * 1024);
+  assert.ok(outcome.text.length <= 256 * 1024);
+  // 半行会被客户端按错误的前缀着色，截断必须以完整行收尾
+  assert.ok(outcome.text.endsWith("\n"), "截断点切在了行中间");
 });
 
 test("log：按新到旧排列；无 HEAD 的空仓库返回空表而不是报错", async () => {
