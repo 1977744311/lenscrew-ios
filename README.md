@@ -17,17 +17,17 @@
 - **统一契约**：codex app-server / claude stream-json / cursor-agent ACP 三条链路归一为同一套会话与审批事件，TS 与 Swift 双语 fixture 锁死线上格式（`protocol/fixtures/`，两侧测试消费同一份 JSON）
 - **手机端六屏 UI**：指挥台 / 会话流水 / 审批 / 新会话 / 眼镜 / 设置，不依赖眼镜即完整可用
 - **眼镜端四屏**：会话列表 / 流水 / 块详情 / 审批卡，600×600，在 DAT 0.8.0 硬约束下做整屏替换 + tap-only + 分页
+- **Apple Watch**：腕上审批（允许一次 / 本会话 / 拒绝，可中断）、会话一瞥、听写追加指令、Smart Stack 小组件；经 WatchConnectivity 由 iPhone 中转，手表不直连 bridge / relay，不持有任何密钥
 - **远程接入（脱离 VPN）**：二维码配对 + 端到端加密 + 自架 relay 中继；局域网直连与中继同协议，直连优先、失败回退中继
 - **APNs 推送**：bridge 直连 Apple（token-based .p8，JWT over HTTP/2）；审批到达与轮次完成即使 App 在后台 SSE 已断也能唤起；审批推送带「允许一次 / 拒绝」可操作按钮，锁屏直接裁决
 - **多 Mac**：手机存多台主机（每台一条 Keychain 口令与公钥记录），设置页切换，会话列表标注归属；支持同时保持多条连接、跨主机聚合会话与合并审批队列
 - **开源自建分发**：不发 iOS 安装包，源码自建（见[分发模式](#分发模式为什么不发安装包)）
 
-**未补全**：
+## Roadmap
 
-- Apple Watch App target（交互 mockup 已定稿，开发中；能力规划见 [Apple Watch](#apple-watch)）
-- git 操作面板
-- 语音输入（手机端）
-- 眼镜真机验证（依赖 Meta Wearables Developer Center 注册与固件 / Meta AI App 版本，见 [眼镜自建](docs/glasses-self-build.md)）
+- git 操作面板：在手机上查看仓库状态 / diff 并执行常用 git 操作
+- 手机端语音输入（手表端听写追加指令已可用）
+- 真机验证：眼镜依赖 Meta Wearables Developer Center 注册与固件 / Meta AI App 版本（见 [眼镜自建](docs/glasses-self-build.md)）；手表 app group 与 APNs 推送在真机上需要开发者账号签名
 
 ## 快速开始
 
@@ -84,7 +84,7 @@ SSE 在 iOS 后台不存活，审批与完成通知靠推送唤起。bridge 直�
 
 ## Apple Watch
 
-腕上审批、会话一瞥、听写追加指令、Smart Stack 常驻。交互 mockup 已定稿，App target 开发中。
+腕上审批器 + 状态一瞥，四屏：审批卡（允许一次 / 本会话 / 拒绝，可中断，选项随 agent 自陈能力动态生成）、会话列表、会话详情（听写追加指令）、Smart Stack 小组件。连接经 WatchConnectivity 由 iPhone 中转：手表只依赖协议层，不直连 bridge / relay，不持有任何密钥。手表 app 随 iOS app 一起构建（Embed Watch Content），无需单独安装。
 
 ## 眼镜自建
 
@@ -100,7 +100,7 @@ Meta Ray-Ban Display 眼镜功能是可选延伸，使用者自行注册 Meta �
 
 ## 运行时接口矩阵
 
-三个 agent 的程序化接口差异很大，下表是 2026-07-25 在本机实测的结论，不是照文档抄的。
+三个 agent 的程序化接口差异很大。下表基于对表头所列版本实际行为的验证，而非官方文档转述；上游版本更新后可能失准，欢迎提 issue 勘误。
 
 | | Codex 0.144.4 | Claude Code 2.1.215 | Cursor 2026.07.23 |
 |---|---|---|---|
@@ -109,7 +109,7 @@ Meta Ray-Ban Display 眼镜功能是可选延伸，使用者自行注册 Meta �
 | 审批通道 | 服务端发 `item/*/requestApproval` 请求等客户端应答 | `--permission-prompt-tool stdio` 开启 control protocol | ACP `session/request_permission` |
 | 会话条目 | 18 类 `ThreadItem` | Anthropic content block | ACP session update |
 
-三个实测发现，都是照文档或生成物写会踩的坑：
+三处经验证与文档或生成物不一致的行为，按文档实现会踩坑：
 
 **Cursor 的 `-p` 模式没有审批通道。** 需要审批的 shell 调用不会向客户端发请求，而是直接以 `tool_call/completed` 且 `result.rejected` 收场。要审批必须走 ACP。这正是契约把 `capabilities` 做成 adapter 运行时自陈、而不是按 agent 种类硬编码的原因。
 
