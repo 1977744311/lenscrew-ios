@@ -40,12 +40,48 @@ struct WatchSessionDTO: Codable, Sendable, Equatable, Identifiable {
     var id: String { "\(hostID.uuidString)#\(sessionID)" }
 }
 
+/// 一台主机上一个 agent 的账号额度：表盘复杂功能与小组件用。
+/// windows 直接复用 AgentProtocol.QuotaWindow，显示名由 windowDurationMins 推导
+struct WatchQuotaDTO: Codable, Sendable, Equatable, Identifiable {
+    var hostID: UUID
+    var hostName: String
+    var agent: AgentKind
+    var planType: String?
+    var windows: [QuotaWindow]
+    var capturedAtMs: Int64
+
+    var id: String { "\(hostID.uuidString)#\(agent.rawValue)" }
+}
+
 /// 推给手表的一瞥快照。applicationContext 语义：只有最新一份有意义。
 struct WatchSnapshot: Codable, Sendable, Equatable {
     var approvals: [WatchApprovalDTO]
     var sessions: [WatchSessionDTO]
+    var quotas: [WatchQuotaDTO]
+    var connectedHosts: Int
 
-    static let empty = WatchSnapshot(approvals: [], sessions: [])
+    static let empty = WatchSnapshot(
+        approvals: [], sessions: [], quotas: [], connectedHosts: 0
+    )
+
+    init(
+        approvals: [WatchApprovalDTO], sessions: [WatchSessionDTO],
+        quotas: [WatchQuotaDTO], connectedHosts: Int
+    ) {
+        self.approvals = approvals
+        self.sessions = sessions
+        self.quotas = quotas
+        self.connectedHosts = connectedHosts
+    }
+
+    /// applicationContext 可能还压着升级前的旧快照，新字段缺席按空值兜底
+    init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        approvals = try container.decode([WatchApprovalDTO].self, forKey: .approvals)
+        sessions = try container.decode([WatchSessionDTO].self, forKey: .sessions)
+        quotas = try container.decodeIfPresent([WatchQuotaDTO].self, forKey: .quotas) ?? []
+        connectedHosts = try container.decodeIfPresent(Int.self, forKey: .connectedHosts) ?? 0
+    }
 
     /// 多台 Mac 并存时，行上才带主机名
     var multiHost: Bool {
@@ -74,6 +110,9 @@ enum WatchWire {
     static let maxRecentLines = 3
     static let maxDetailChars = 800
     static let maxLineChars = 120
+    /// 额度条目（每台主机每个 agent 一条）与单条内窗口数的上限
+    static let maxQuotaEntries = 4
+    static let maxQuotaWindows = 4
 
     static func encode(_ snapshot: WatchSnapshot) throws -> Data {
         try JSONEncoder().encode(snapshot)

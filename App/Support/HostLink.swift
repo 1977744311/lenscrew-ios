@@ -31,6 +31,9 @@ final class HostLink: Identifiable {
     private(set) var linkPath: HostLinkPath?
     /// sessionID → 轮次分隔线（按到达顺序）；键在本主机命名空间内，不会撞号
     private(set) var turnMarkers: [String: [TurnMarker]] = [:]
+    /// 本主机的账号级额度，按 agent 各留最新一份（目前只有 codex 有通道）。
+    /// bridge 在接入时会补发缓存快照，断线重连后立即恢复，无需本地持久化
+    private(set) var quota: [AgentKind: AgentQuotaSnapshot] = [:]
     /// 本主机上由本机发起创建的会话的模式
     private(set) var sessionModes: [String: SessionMode] = [:]
     /// VM 按 hostID 路由动作时直接取用；断开为 nil
@@ -236,6 +239,7 @@ final class HostLink: Identifiable {
         sessions = []
         glassScreen = .sessionList
         turnMarkers = [:]
+        quota = [:]
         sessionModes = [:]
         pendingModes = []
         lastBlockID = [:]
@@ -313,6 +317,9 @@ final class HostLink: Identifiable {
             guard turnMarkers[sessionID]?.contains(where: { $0.id == marker.id }) != true
             else { return }
             turnMarkers[sessionID, default: []].append(marker)
+
+        case let .quotaUpdated(_, snapshot):
+            quota[snapshot.agent] = snapshot
 
         default:
             break

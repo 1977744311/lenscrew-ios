@@ -26,9 +26,10 @@ enum WatchRoute: Hashable {
 
 struct WatchRootView: View {
     let link: WatchLink
+    @State private var path: [WatchRoute] = []
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             WatchSessionListView(link: link)
                 .navigationDestination(for: WatchRoute.self) { route in
                     switch route {
@@ -38,6 +39,10 @@ struct WatchRootView: View {
                         WatchSessionDetailView(link: link, sessionID: id)
                     }
                 }
+        }
+        // 表盘复杂功能的深链：审批类模块直达审批队列，其余回根列表
+        .onOpenURL { url in
+            path = url.host == "approvals" ? [.approvals] : []
         }
     }
 }
@@ -112,18 +117,37 @@ final class WatchLink: NSObject {
         refreshGlanceWidget(snapshot)
     }
 
-    /// Smart Stack 小组件的数据随每份快照落盘刷新（widget 时间线策略是 .never）
+    /// 小组件与表盘复杂功能的数据随每份快照落盘刷新（widget 时间线策略是 .never）
     private func refreshGlanceWidget(_ snapshot: WatchSnapshot) {
+        // 额度行打平：quotas 已按主机名排序、窗口主桶优先，取前三行
+        let rows = snapshot.quotas
+            .flatMap { entry in
+                entry.windows.map { window in
+                    WatchGlanceStore.QuotaGlance(
+                        hostName: entry.hostName,
+                        label: window.label,
+                        remainingPercent: max(0, min(100, 100 - window.usedPercent)),
+                        windowDurationMins: window.windowDurationMins,
+                        resetsAt: window.resetsAt
+                    )
+                }
+            }
+            .prefix(3)
         WatchGlanceStore.save(
             WatchGlanceStore.Glance(
                 pendingApprovals: snapshot.approvals.count,
                 running: snapshot.sessions.count { $0.status == .running },
                 headline: snapshot.approvals.first.map {
                     "\($0.approval.title) · \($0.sessionTitle)"
-                }
+                },
+                connectedHosts: snapshot.connectedHosts,
+                quota: Array(rows),
+                // 多主机取最旧的采集时刻，新鲜度宁可保守也不虚报
+                quotaCapturedAtMs: snapshot.quotas.map(\.capturedAtMs).min()
             )
         )
-        WidgetCenter.shared.reloadTimelines(ofKind: WatchGlanceStore.widgetKind)
+        // 一份数据喂全部模块（一瞥 + 各表盘复杂功能），全量刷新
+        WidgetCenter.shared.reloadAllTimelines()
     }
 }
 
@@ -151,6 +175,13 @@ extension WatchLink: WCSessionDelegate {
     /// iPhone 有新审批时补发的即时消息，载荷与 context 同构
     nonisolated func session(_ session: WCSession, didReceiveMessage message: [String: Any]) {
         guard let data = message[WatchWire.snapshotKey] as? Data else { return }
+        Task { @MainActor in self.apply(snapshotData: data) }
+    }
+
+    /// 表盘复杂功能的后台数据通道：iPhone 的 transferCurrentComplicationUserInfo
+    /// 从这里进来，系统会为它在后台唤起手表 App，落盘后所有小组件跟着刷新
+    nonisolated func session(_ session: WCSession, didReceiveUserInfo userInfo: [String: Any]) {
+        guard let data = userInfo[WatchWire.snapshotKey] as? Data else { return }
         Task { @MainActor in self.apply(snapshotData: data) }
     }
 }

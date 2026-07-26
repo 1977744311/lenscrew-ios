@@ -40,6 +40,15 @@ struct AggregatedSession: Identifiable, Sendable {
     var id: SessionKey { key }
 }
 
+/// 一台主机上一个 agent 的账号额度投影；Watch 转发额度时也照这个形状取数
+struct HostQuota: Identifiable, Sendable {
+    let hostID: UUID
+    let hostName: String
+    let quota: AgentQuotaSnapshot
+
+    var id: String { "\(hostID.uuidString)#\(quota.agent.rawValue)" }
+}
+
 /// 跨主机合并后的待审批条目。approval.id 也可能跨主机撞号，id 里必须掺 hostID。
 struct PendingApprovalItem: Identifiable, Sendable {
     let hostID: UUID
@@ -130,6 +139,24 @@ final class CrewViewModel {
                 }
             }
             .sorted { $0.approval.requestedAtMs > $1.approval.requestedAtMs }
+    }
+
+    /// 全部主机的账号额度打平；主机名升序、agent 名次序稳定，供手表快照直接消费
+    var hostQuotas: [HostQuota] {
+        hosts.hosts
+            .flatMap { host in
+                (links[host.id]?.quota ?? [:]).values.map {
+                    HostQuota(hostID: host.id, hostName: host.name, quota: $0)
+                }
+            }
+            .sorted {
+                ($0.hostName, $0.quota.agent.rawValue) < ($1.hostName, $1.quota.agent.rawValue)
+            }
+    }
+
+    /// 已连接主机数；手表小组件的"主机状态"模块消费
+    var connectedHostCount: Int {
+        links.values.filter(\.isConnected).count
     }
 
     func sessionState(for key: SessionKey) -> SessionState? {

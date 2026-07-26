@@ -16,6 +16,11 @@ final class WatchBridge: NSObject {
     private var lastPushed: WatchSnapshot?
     private var lastApprovalIDs: Set<String> = []
     private var activated = false
+    /// 表盘复杂功能的推送预算（系统约 50 次/天）：只在腕上可见的数字变了才花，
+    /// 且除新审批外两次转移至少间隔 15 分钟
+    private var lastComplicationFingerprint: String?
+    private var lastComplicationAt: Date = .distantPast
+    private static let complicationMinInterval: TimeInterval = 15 * 60
 
     private override init() {
         super.init()
@@ -38,7 +43,8 @@ final class WatchBridge: NSObject {
         guard let model else { return }
         let snapshot = withObservationTracking {
             Self.buildSnapshot(
-                approvals: model.pendingApprovalItems, sessions: model.aggregatedSessions
+                approvals: model.pendingApprovalItems, sessions: model.aggregatedSessions,
+                quotas: model.hostQuotas, connectedHosts: model.connectedHostCount
             )
         } onChange: { [weak self] in
             Task { @MainActor [weak self] in self?.observeAndPush() }
@@ -51,7 +57,8 @@ final class WatchBridge: NSObject {
         guard let model else { return }
         pushIfChanged(
             Self.buildSnapshot(
-                approvals: model.pendingApprovalItems, sessions: model.aggregatedSessions
+                approvals: model.pendingApprovalItems, sessions: model.aggregatedSessions,
+                quotas: model.hostQuotas, connectedHosts: model.connectedHostCount
             )
         )
     }
@@ -63,19 +70,60 @@ final class WatchBridge: NSObject {
         guard snapshot != lastPushed, let data = try? WatchWire.encode(snapshot) else { return }
         try? session.updateApplicationContext([WatchWire.snapshotKey: data])
         let ids = Set(snapshot.approvals.map(\.id))
-        if !ids.subtracting(lastApprovalIDs).isEmpty, session.isReachable {
+        let hasNewApproval = !ids.subtracting(lastApprovalIDs).isEmpty
+        if hasNewApproval, session.isReachable {
             session.sendMessage(
                 [WatchWire.snapshotKey: data], replyHandler: nil, errorHandler: nil
             )
         }
+        pushComplicationIfWorthIt(snapshot, data: data, hasNewApproval: hasNewApproval)
         lastPushed = snapshot
         lastApprovalIDs = ids
+    }
+
+    /// applicationContext 只在手表 App 醒着时被消费；表盘上的数字要靠
+    /// transferCurrentComplicationUserInfo 在后台唤起小组件刷新。
+    /// 预算有限：指纹没变不花、变了但非新审批且距上次不足 15 分钟也不花。
+    private func pushComplicationIfWorthIt(
+        _ snapshot: WatchSnapshot, data: Data, hasNewApproval: Bool
+    ) {
+        let session = WCSession.default
+        let fingerprint = Self.complicationFingerprint(snapshot)
+        guard fingerprint != lastComplicationFingerprint else { return }
+        let now = Date()
+        guard
+            hasNewApproval
+                || now.timeIntervalSince(lastComplicationAt) >= Self.complicationMinInterval
+        else { return }
+        guard session.remainingComplicationUserInfoTransfers > 0 else { return }
+        session.transferCurrentComplicationUserInfo([WatchWire.snapshotKey: data])
+        lastComplicationFingerprint = fingerprint
+        lastComplicationAt = now
+    }
+
+    /// 腕上可见数字的指纹：待批数、运行数、连接主机数、各额度窗口剩余（5% 一档）。
+    /// internal 而非 private：纯映射，LensCrewAppTests 直接断言分档行为。
+    static func complicationFingerprint(_ snapshot: WatchSnapshot) -> String {
+        let running = snapshot.sessions.filter { $0.status == .running }.count
+        let quotaPart = snapshot.quotas
+            .map { entry in
+                let windows = entry.windows
+                    .map { window in
+                        let remaining = max(0, min(100, 100 - window.usedPercent))
+                        return "\(window.id):\(remaining / 5)"
+                    }
+                    .joined(separator: ",")
+                return "\(entry.id)[\(windows)]"
+            }
+            .joined(separator: ";")
+        return "a\(snapshot.approvals.count)|r\(running)|h\(snapshot.connectedHosts)|\(quotaPart)"
     }
 
     /// VM 聚合态 → 手表 DTO：只带腕上要渲染的字段，长文本按 WatchWire 上限截断。
     /// internal 而非 private：纯映射，LensCrewAppTests 直接对它做裁剪断言。
     static func buildSnapshot(
-        approvals: [PendingApprovalItem], sessions: [AggregatedSession]
+        approvals: [PendingApprovalItem], sessions: [AggregatedSession],
+        quotas: [HostQuota] = [], connectedHosts: Int = 0
     ) -> WatchSnapshot {
         WatchSnapshot(
             approvals: approvals.prefix(WatchWire.maxApprovals).map { item in
@@ -101,7 +149,16 @@ final class WatchBridge: NSObject {
                         )
                     }
                 )
-            }
+            },
+            quotas: quotas.prefix(WatchWire.maxQuotaEntries).map { item in
+                WatchQuotaDTO(
+                    hostID: item.hostID, hostName: item.hostName,
+                    agent: item.quota.agent, planType: item.quota.planType,
+                    windows: Array(item.quota.windows.prefix(WatchWire.maxQuotaWindows)),
+                    capturedAtMs: item.quota.capturedAtMs
+                )
+            },
+            connectedHosts: connectedHosts
         )
     }
 

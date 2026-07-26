@@ -35,7 +35,20 @@ private func makeSnapshot(hostA: UUID, hostB: UUID) -> WatchSnapshot {
                     WatchTranscriptLine(text: "思考完成", mono: false),
                 ]
             )
-        ]
+        ],
+        quotas: [
+            WatchQuotaDTO(
+                hostID: hostA, hostName: "书房 Mac", agent: .codex, planType: "pro",
+                windows: [
+                    QuotaWindow(
+                        id: "codex/primary", label: nil, usedPercent: 18,
+                        windowDurationMins: 10_080, resetsAt: 1_785_640_649
+                    )
+                ],
+                capturedAtMs: 1_785_027_600_000
+            )
+        ],
+        connectedHosts: 2
     )
 }
 
@@ -51,6 +64,19 @@ struct WatchProtoTests {
         // 复合 id 同构性顺带校验
         #expect(decoded.approvals[0].id.hasSuffix("#ap-1"))
         #expect(decoded.sessions[0].id.hasSuffix("#s-1"))
+        #expect(decoded.quotas[0].id.hasSuffix("#codex"))
+        #expect(decoded.connectedHosts == 2)
+    }
+
+    @Test("升级前的旧快照缺额度字段也能解，按空值兜底")
+    func decodesLegacySnapshotWithoutQuota() throws {
+        // 模拟 applicationContext 里压着的旧版载荷：只有 approvals/sessions 两键
+        let legacy = """
+            {"approvals": [], "sessions": []}
+            """
+        let decoded = try #require(WatchWire.decodeSnapshot(Data(legacy.utf8)))
+        #expect(decoded.quotas.isEmpty)
+        #expect(decoded.connectedHosts == 0)
     }
 
     @Test("坏载荷解码返回 nil，不抛也不崩")

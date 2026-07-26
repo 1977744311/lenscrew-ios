@@ -135,4 +135,73 @@ struct WatchBridgeSnapshotTests {
         #expect(mixed.multiHost)
         #expect(WatchBridge.buildSnapshot(approvals: [], sessions: []) == .empty)
     }
+
+    @Test("额度条目裁到 4 条、单条窗口裁到 4 个，字段原样透传")
+    func clipsQuotas() throws {
+        let host = UUID()
+        let windows = (0..<6).map {
+            QuotaWindow(
+                id: "codex/w\($0)", label: nil, usedPercent: 10 * $0,
+                windowDurationMins: 10_080, resetsAt: nil
+            )
+        }
+        let quotas = (0..<6).map { ordinal in
+            HostQuota(
+                hostID: host, hostName: "Mac \(ordinal)",
+                quota: AgentQuotaSnapshot(
+                    agent: .codex, planType: "pro", windows: windows,
+                    capturedAtMs: Int64(ordinal)
+                )
+            )
+        }
+
+        let snapshot = WatchBridge.buildSnapshot(
+            approvals: [], sessions: [], quotas: quotas, connectedHosts: 3
+        )
+        #expect(snapshot.quotas.count == WatchWire.maxQuotaEntries)
+        let first = try #require(snapshot.quotas.first)
+        #expect(first.windows.count == WatchWire.maxQuotaWindows)
+        #expect(first.windows[0].usedPercent == 0)
+        #expect(first.planType == "pro")
+        #expect(first.id == "\(host.uuidString)#codex")
+        #expect(snapshot.connectedHosts == 3)
+    }
+
+    @Test("complication 指纹按 5% 分档：小抖动不换指纹、跨档必换")
+    func complicationFingerprintBuckets() {
+        let host = UUID()
+        func snapshot(usedPercent: Int) -> WatchSnapshot {
+            WatchBridge.buildSnapshot(
+                approvals: [], sessions: [],
+                quotas: [
+                    HostQuota(
+                        hostID: host, hostName: "Mac",
+                        quota: AgentQuotaSnapshot(
+                            agent: .codex, planType: nil,
+                            windows: [
+                                QuotaWindow(
+                                    id: "codex/primary", label: nil, usedPercent: usedPercent,
+                                    windowDurationMins: 10_080, resetsAt: nil
+                                )
+                            ],
+                            capturedAtMs: Int64(usedPercent)  // 采集时刻不该影响指纹
+                        )
+                    )
+                ],
+                connectedHosts: 1
+            )
+        }
+        let base = WatchBridge.complicationFingerprint(snapshot(usedPercent: 11))
+        #expect(WatchBridge.complicationFingerprint(snapshot(usedPercent: 13)) == base, "同档 5% 内不换")
+        #expect(WatchBridge.complicationFingerprint(snapshot(usedPercent: 16)) != base, "跨档必换")
+
+        // 待批数进指纹：审批出现表盘就该有机会立刻刷新
+        let withApproval = WatchBridge.buildSnapshot(
+            approvals: [makeApprovalItem(ordinal: 1, hostID: host)], sessions: []
+        )
+        #expect(
+            WatchBridge.complicationFingerprint(withApproval)
+                != WatchBridge.complicationFingerprint(.empty)
+        )
+    }
 }
