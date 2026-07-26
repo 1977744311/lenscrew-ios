@@ -17,7 +17,8 @@
 - **统一契约**：codex app-server / claude stream-json / cursor-agent ACP 三条链路归一为同一套会话与审批事件，TS 与 Swift 双语 fixture 锁死线上格式（`protocol/fixtures/`，两侧测试消费同一份 JSON）
 - **手机端六屏 UI**：指挥台 / 会话流水 / 审批 / 新会话 / 眼镜 / 设置，不依赖眼镜即完整可用
 - **眼镜端四屏**：会话列表 / 流水 / 块详情 / 审批卡，600×600，在 DAT 0.8.0 硬约束下做整屏替换 + tap-only + 分页
-- **Apple Watch**：腕上审批（允许一次 / 本会话 / 拒绝，可中断）、会话一瞥、听写追加指令、Smart Stack 小组件；经 WatchConnectivity 由 iPhone 中转，手表不直连 bridge / relay，不持有任何密钥
+- **Apple Watch**：腕上审批（允许一次 / 本会话 / 拒绝，可中断）、会话一瞥、听写追加指令、Smart Stack 小组件与七个表盘复杂功能模块（覆盖圆形 / 边角 / 单行 / 矩形全部槽位）；经 WatchConnectivity 由 iPhone 中转，手表不直连 bridge / relay，不持有任何密钥
+- **Codex 账号额度**：bridge 经 `account/rateLimits/read` + `updated` 采集，闲时由探针每 30 分钟校准一次；额度随快照进手表，表盘上直接看剩余百分比与重置窗口。Claude / Cursor 无程序化额度通道（见 Roadmap）
 - **远程接入（脱离 VPN）**：二维码配对 + 端到端加密 + 自架 relay 中继；局域网直连与中继同协议，直连优先、失败回退中继
 - **APNs 推送**：bridge 直连 Apple（token-based .p8，JWT over HTTP/2）；审批到达与轮次完成即使 App 在后台 SSE 已断也能唤起；审批推送带「允许一次 / 拒绝」可操作按钮，锁屏直接裁决
 - **多 Mac**：手机存多台主机（每台一条 Keychain 口令与公钥记录），设置页切换，会话列表标注归属；支持同时保持多条连接、跨主机聚合会话与合并审批队列
@@ -27,6 +28,8 @@
 
 - git 操作面板：在手机上查看仓库状态 / diff 并执行常用 git 操作
 - 手机端语音输入（手表端听写追加指令已可用）
+- 手机端额度展示：额度数据已进 App 层，指挥台 / 设置页尚未渲染
+- Claude / Cursor 账号额度：两家目前都没有程序化通道（Claude 的 stream-json 只给 token 用量，Cursor ACP 的 usage_update 是上下文占用而非额度），待上游暴露再接
 - 真机验证：眼镜依赖 Meta Wearables Developer Center 注册与固件 / Meta AI App 版本（见 [眼镜自建](docs/glasses-self-build.md)）；手表 app group 与 APNs 推送在真机上需要开发者账号签名
 
 ## 快速开始
@@ -85,6 +88,8 @@ SSE 在 iOS 后台不存活，审批与完成通知靠推送唤起。bridge 直�
 ## Apple Watch
 
 腕上审批器 + 状态一瞥，四屏：审批卡（允许一次 / 本会话 / 拒绝，可中断，选项随 agent 自陈能力动态生成）、会话列表、会话详情（听写追加指令）、Smart Stack 小组件。连接经 WatchConnectivity 由 iPhone 中转：手表只依赖协议层，不直连 bridge / relay，不持有任何密钥。手表 app 随 iOS app 一起构建（Embed Watch Content），无需单独安装。
+
+**表盘复杂功能**：七个模块——LensCrew 一瞥、待审批、运行中会话、Codex 额度环、额度详情、任务 + 额度组合卡、已连主机——覆盖圆形 / 边角 / 单行 / 矩形全部槽位（矩形槽见于 Modular / Infograph Modular / Modular Ultra 等表盘），在表盘编辑里添加，点按直达审批队列或 App，去色表盘下由系统统一着色。数据由 iPhone 推送：常态走 applicationContext，表盘数字靠 `transferCurrentComplicationUserInfo` 后台唤起刷新——系统给它每天约 50 次预算，桥接侧按「腕上可见数字真变了才花、除新审批外至少间隔 15 分钟」花费。表盘定位是分钟级一瞥，审批的实时性仍以推送通知与打开 App 为准。
 
 ## 眼镜自建
 
