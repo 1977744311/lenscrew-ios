@@ -29,7 +29,12 @@ import {
   type EncryptedEnvelope,
 } from "../src/secure/crypto.ts";
 import type { BridgeIdentity } from "../src/state/stateDir.ts";
-import type { AgentSession, BridgeEvent, ClientCommand } from "../src/protocol/events.ts";
+import type {
+  AgentQuotaSnapshot,
+  AgentSession,
+  BridgeEvent,
+  ClientCommand,
+} from "../src/protocol/events.ts";
 
 const TOKEN = "e2ee-test-token";
 
@@ -53,6 +58,10 @@ class FakeHub implements GatewayHub {
   }
   listSessions(): AgentSession[] {
     return this.sessions;
+  }
+  quota: AgentQuotaSnapshot[] = [];
+  latestQuota(): AgentQuotaSnapshot[] {
+    return this.quota;
   }
   emit(event: BridgeEvent): void {
     for (const listener of this.#listeners) listener(event);
@@ -107,7 +116,7 @@ async function startServer(): Promise<Harness> {
     displayName: "E2EE Mac",
     pairingWindow: { isOpen: () => true, expiresAtMs: () => Date.now() + 300_000 },
   });
-  // server 只调用 hub 的 onEvent/handle/replay/listSessions;
+  // server 只调用 hub 的 onEvent/handle/replay/listSessions/latestQuota;
   // SessionHub 的 # 私有字段挡住了结构化 stub,这里显式越过 nominal 检查
   const server = createBridgeServer({
     hub: hub as unknown as SessionHub,

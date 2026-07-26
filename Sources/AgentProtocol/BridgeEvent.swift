@@ -30,6 +30,8 @@ public enum BridgeEvent: Sendable, Equatable {
         cachedInputTokens: Int?, stopReason: TurnStopReason?
     )
     case bridgeError(seq: Int, sessionID: String?, message: String, fatal: Bool)
+    /// 账号级事件，不属于任何会话：seq 恒为 0，不参与断档补齐，客户端只保留最新一份
+    case quotaUpdated(seq: Int, quota: AgentQuotaSnapshot)
 
     public var seq: Int {
         switch self {
@@ -43,10 +45,11 @@ public enum BridgeEvent: Sendable, Equatable {
         case let .approvalSettled(seq, _, _, _, _): return seq
         case let .turnCompleted(seq, _, _, _, _, _): return seq
         case let .bridgeError(seq, _, _, _): return seq
+        case let .quotaUpdated(seq, _): return seq
         }
     }
 
-    /// 非会话级事件（致命的 bridgeError）返回 nil
+    /// 非会话级事件（致命的 bridgeError、账号额度）返回 nil
     public var sessionID: String? {
         switch self {
         case let .sessionCreated(_, session): return session.id
@@ -59,6 +62,7 @@ public enum BridgeEvent: Sendable, Equatable {
         case let .approvalSettled(_, id, _, _, _): return id
         case let .turnCompleted(_, id, _, _, _, _): return id
         case let .bridgeError(_, id, _, _): return id
+        case .quotaUpdated: return nil
         }
     }
 }
@@ -68,7 +72,7 @@ extension BridgeEvent: Codable {
         case type, seq, sessionId, session, status, reason, block, blockId, patch
         case approval, approvalId, optionId, outcome
         case inputTokens, outputTokens, cachedInputTokens, stopReason
-        case message, fatal
+        case message, fatal, quota
     }
 
     public init(from decoder: any Decoder) throws {
@@ -143,6 +147,11 @@ extension BridgeEvent: Codable {
                 message: try container.decode(String.self, forKey: .message),
                 fatal: try container.decode(Bool.self, forKey: .fatal)
             )
+        case "quotaUpdated":
+            self = .quotaUpdated(
+                seq: seq,
+                quota: try container.decode(AgentQuotaSnapshot.self, forKey: .quota)
+            )
         default:
             throw DecodingError.dataCorruptedError(
                 forKey: .type, in: container,
@@ -202,6 +211,9 @@ extension BridgeEvent: Codable {
             try container.encode(sessionID, forKey: .sessionId)
             try container.encode(message, forKey: .message)
             try container.encode(fatal, forKey: .fatal)
+        case let .quotaUpdated(_, quota):
+            try container.encode("quotaUpdated", forKey: .type)
+            try container.encode(quota, forKey: .quota)
         }
     }
 }

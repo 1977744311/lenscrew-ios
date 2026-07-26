@@ -190,6 +190,38 @@ export type TurnStopReason =
   | "refused"
   | "failed";
 
+// MARK: - 账号额度
+
+/**
+ * 一个滚动额度窗口。标签显示名必须由 windowDurationMins 推导（5h/周/…），
+ * 不能按 primary/secondary 位置硬编码——实测有账号只有一个 10080 分钟的
+ * primary 窗口而没有 secondary，"primary=5h" 的假设直接就是错的。
+ */
+export interface QuotaWindow {
+  /** 跨快照稳定的窗口标识：`<limitId>/primary` 或 `<limitId>/secondary` */
+  id: string;
+  /** 运行时给的人读名（模型专属桶才有）；null 时客户端按窗口时长推导显示名 */
+  label: string | null;
+  /** wire 原值不钳位，显示层自行 clamp 到 0–100 */
+  usedPercent: number;
+  windowDurationMins: number | null;
+  /** unix 秒 */
+  resetsAt: number | null;
+}
+
+/**
+ * 账号级额度快照。只有 codex 有程序化通道（account/rateLimits/read + updated），
+ * claude 的 stream-json 与 cursor 的 ACP 都拿不到账号额度，
+ * 所以 agent 目前恒为 "codex"——但契约不为单一实现收窄类型。
+ */
+export interface AgentQuotaSnapshot {
+  agent: AgentKind;
+  planType: string | null;
+  windows: QuotaWindow[];
+  /** bridge 收到该快照的时刻；客户端据此显示数据新鲜度 */
+  capturedAtMs: number;
+}
+
 // MARK: - bridge → 客户端
 
 /**
@@ -258,7 +290,12 @@ export type BridgeEvent =
       sessionId: string | null;
       message: string;
       fatal: boolean;
-    };
+    }
+  /**
+   * 账号级事件，不属于任何会话：seq 恒为 0，不进重放窗口也不参与断档补齐
+   * （与首连时补发的合成 sessionCreated 同一先例）。客户端只保留最新一份。
+   */
+  | { type: "quotaUpdated"; seq: number; quota: AgentQuotaSnapshot };
 
 // MARK: - 客户端 → bridge
 

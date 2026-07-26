@@ -1,8 +1,10 @@
 import type {
   AgentKind,
+  AgentQuotaSnapshot,
   AgentSession,
   BridgeEvent,
   ClientCommand,
+  QuotaWindow,
   SessionMode,
 } from "../protocol/events.ts";
 import type { AdapterEvent, AgentAdapter } from "../adapters/types.ts";
@@ -28,6 +30,28 @@ function snapshot(session: AgentSession): AgentSession {
   return { ...session, capabilities: { ...session.capabilities } };
 }
 
+/** 主桶 "codex" 的窗口排最前，其余按 id 字典序；顺序稳定合并去重才可比 */
+function sortQuotaWindows(windows: QuotaWindow[]): QuotaWindow[] {
+  return windows.sort((a, b) => {
+    const limitA = a.id.split("/")[0] ?? "";
+    const limitB = b.id.split("/")[0] ?? "";
+    if (limitA !== limitB) {
+      if (limitA === "codex") return -1;
+      if (limitB === "codex") return 1;
+      return limitA < limitB ? -1 : 1;
+    }
+    return a.id < b.id ? -1 : 1;
+  });
+}
+
+/** 只比内容不比 capturedAtMs：数字没变就不值得再广播一轮 */
+function sameQuotaContent(a: AgentQuotaSnapshot, b: AgentQuotaSnapshot): boolean {
+  return (
+    JSON.stringify({ planType: a.planType, windows: a.windows }) ===
+    JSON.stringify({ planType: b.planType, windows: b.windows })
+  );
+}
+
 interface SessionRecord {
   session: AgentSession;
   adapter: AgentAdapter;
@@ -47,6 +71,8 @@ export class SessionHub {
   readonly #makeAdapter: AdapterFactory;
   readonly #sessions = new Map<string, SessionRecord>();
   readonly #listeners = new Set<BridgeEventListener>();
+  /** 账号级额度缓存，按 agent 各留最新一份；会话关了它也得活着 */
+  readonly #quota = new Map<AgentKind, AgentQuotaSnapshot>();
   #nextSessionOrdinal = 1;
 
   constructor(makeAdapter: AdapterFactory) {
@@ -60,6 +86,34 @@ export class SessionHub {
 
   listSessions(): AgentSession[] {
     return [...this.#sessions.values()].map((record) => record.session);
+  }
+
+  /** 新客户端接入时补发用；顺序无约定 */
+  latestQuota(): AgentQuotaSnapshot[] {
+    return [...this.#quota.values()];
+  }
+
+  /**
+   * 并入一份（可能稀疏的）额度快照并在内容变化时广播。
+   * 入口有两个：会话 adapter 的 quotaUpdated 事件、无会话时的定期探针。
+   * codex 的 updated 通知只带单桶，按窗口 id 与既有缓存合并成全量。
+   */
+  ingestQuota(incoming: AgentQuotaSnapshot): void {
+    const previous = this.#quota.get(incoming.agent);
+    const byId = new Map<string, QuotaWindow>();
+    for (const window of previous?.windows ?? []) byId.set(window.id, window);
+    for (const window of incoming.windows) byId.set(window.id, { ...window });
+    const merged: AgentQuotaSnapshot = {
+      agent: incoming.agent,
+      planType: incoming.planType ?? previous?.planType ?? null,
+      windows: sortQuotaWindows([...byId.values()]),
+      capturedAtMs: incoming.capturedAtMs,
+    };
+    // 内容没变只刷新缓存时间戳（新客户端该知道数据仍然新鲜），不再广播
+    this.#quota.set(incoming.agent, merged);
+    if (previous !== undefined && sameQuotaContent(previous, merged)) return;
+    const event: BridgeEvent = { type: "quotaUpdated", seq: 0, quota: merged };
+    for (const listener of this.#listeners) listener(event);
   }
 
   async handle(command: ClientCommand): Promise<void> {
@@ -207,6 +261,12 @@ export class SessionHub {
     record: SessionRecord,
     event: AdapterEvent | { type: "sessionCreated"; session: AgentSession },
   ): void {
+    // 账号级事件走 host 级缓存，不编号、不进会话日志、不碰会话元数据
+    if (event.type === "quotaUpdated") {
+      this.ingestQuota(event.quota);
+      return;
+    }
+
     record.session.updatedAtMs = Date.now();
 
     // 元数据变更改完就走 sessionUpdated 快照，不各自开一种事件：

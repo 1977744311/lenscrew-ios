@@ -44,7 +44,7 @@ struct ContractFixtureTests {
         }
     }
 
-    @Test("fixture 覆盖了全部十种事件")
+    @Test("fixture 覆盖了全部十一种事件")
     func coversEveryEventType() throws {
         let data = try Data(contentsOf: fixtureURL("bridge-events.json"))
         let rawEvents = try #require(
@@ -54,7 +54,7 @@ struct ContractFixtureTests {
         let expected: Set<String> = [
             "sessionCreated", "sessionUpdated", "sessionStatus", "sessionClosed",
             "blockAppended", "blockUpdated", "approvalRequested", "approvalSettled",
-            "turnCompleted", "bridgeError",
+            "turnCompleted", "bridgeError", "quotaUpdated",
         ]
         #expect(types == expected)
     }

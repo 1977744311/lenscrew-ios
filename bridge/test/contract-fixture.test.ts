@@ -5,12 +5,14 @@ import { join } from "node:path";
 
 import type {
   AgentCapabilities,
+  AgentQuotaSnapshot,
   AgentSession,
   ApprovalOption,
   ApprovalRequest,
   BridgeEvent,
   FileChangeSummary,
   PlanStep,
+  QuotaWindow,
   TranscriptBlock,
   TranscriptBlockPatch,
 } from "../src/protocol/events.ts";
@@ -114,6 +116,25 @@ function rebuildApproval(value: ApprovalRequest): ApprovalRequest {
     cwd: value.cwd,
     options: value.options.map(rebuildOption),
     requestedAtMs: value.requestedAtMs,
+  };
+}
+
+function rebuildWindow(value: QuotaWindow): QuotaWindow {
+  return {
+    id: value.id,
+    label: value.label,
+    usedPercent: value.usedPercent,
+    windowDurationMins: value.windowDurationMins,
+    resetsAt: value.resetsAt,
+  };
+}
+
+function rebuildQuota(value: AgentQuotaSnapshot): AgentQuotaSnapshot {
+  return {
+    agent: value.agent,
+    planType: value.planType,
+    windows: value.windows.map(rebuildWindow),
+    capturedAtMs: value.capturedAtMs,
   };
 }
 
@@ -258,6 +279,8 @@ function rebuildEvent(event: BridgeEvent): BridgeEvent {
         message: event.message,
         fatal: event.fatal,
       };
+    case "quotaUpdated":
+      return { type: "quotaUpdated", seq: event.seq, quota: rebuildQuota(event.quota) };
   }
 }
 
@@ -293,7 +316,7 @@ test("fixture 里的 capabilities 不带契约之外的键", () => {
 });
 
 /** 与 Swift 侧同名断言成对存在：任一侧发现覆盖缺口，两边都该补 */
-test("fixture 覆盖全部十种事件", () => {
+test("fixture 覆盖全部十一种事件", () => {
   const types = new Set(fixture.map((event) => event.type));
   assert.deepStrictEqual(
     [...types].sort(),
@@ -303,6 +326,7 @@ test("fixture 覆盖全部十种事件", () => {
       "blockAppended",
       "blockUpdated",
       "bridgeError",
+      "quotaUpdated",
       "sessionClosed",
       "sessionCreated",
       "sessionStatus",

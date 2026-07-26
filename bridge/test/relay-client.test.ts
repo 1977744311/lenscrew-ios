@@ -30,7 +30,12 @@ import {
   type EncryptedEnvelope,
 } from "../src/secure/crypto.ts";
 import type { BridgeIdentity } from "../src/state/stateDir.ts";
-import type { AgentSession, BridgeEvent, ClientCommand } from "../src/protocol/events.ts";
+import type {
+  AgentQuotaSnapshot,
+  AgentSession,
+  BridgeEvent,
+  ClientCommand,
+} from "../src/protocol/events.ts";
 
 // MARK: - 最小 hub stub
 
@@ -46,6 +51,9 @@ class StubHub implements GatewayHub {
     return [];
   }
   listSessions(): AgentSession[] {
+    return [];
+  }
+  latestQuota(): AgentQuotaSnapshot[] {
     return [];
   }
 }

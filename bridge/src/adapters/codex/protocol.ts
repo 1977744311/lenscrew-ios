@@ -326,6 +326,38 @@ export interface CodexThreadTokenUsageUpdatedParams {
   };
 }
 
+// MARK: - 账号额度
+//
+// 2026-07-26 用 0.144.4 实测：`account/rateLimits/read` 响应与 generate-json-schema
+// 一致；本机 Pro 账号只有 primary（10080 分钟 = 周窗口）而 secondary 为 null，
+// 另有 rateLimitsByLimitId 多桶视图（主桶 "codex" + 模型专属桶）。
+// `account/rateLimits/updated` 通知是稀疏滚动更新，只带单桶 rateLimits。
+
+export interface CodexRateLimitWindow {
+  usedPercent: number;
+  windowDurationMins?: number | null;
+  /** unix 秒 */
+  resetsAt?: number | null;
+}
+
+/** 只声明我们消费的字段；credits / individualLimit 等按需再加 */
+export interface CodexRateLimitSnapshot {
+  limitId?: string | null;
+  limitName?: string | null;
+  planType?: string | null;
+  primary?: CodexRateLimitWindow | null;
+  secondary?: CodexRateLimitWindow | null;
+}
+
+export interface CodexAccountRateLimitsUpdatedParams {
+  rateLimits: CodexRateLimitSnapshot;
+}
+
+export interface CodexGetAccountRateLimitsResponse {
+  rateLimits?: CodexRateLimitSnapshot;
+  rateLimitsByLimitId?: Record<string, CodexRateLimitSnapshot> | null;
+}
+
 export interface CodexErrorParams {
   error: {
     message: string;

@@ -12,8 +12,9 @@
 //                发起 turn 得到的真实 error 通知 + turn/completed(status=failed)。
 //                单独录是因为跑成功轮那次进程在第二轮前先被硬超时收掉了。
 //
-// 录制里保留了 codex 自带的噪音通知（mcpServer/startupStatus/updated、
-// account/rateLimits/updated、warning 等），正好用来验证归一器把它们丢干净。
+// 录制里保留了 codex 自带的其余通知：mcpServer/startupStatus/updated、warning 等
+// 噪音用来验证归一器把它们丢干净；account/rateLimits/updated 起初也是噪音，
+// 2026-07-26 起被账号额度管线消费，用同一份录制验证单桶快照的翻译。
 // 事后做过一次脱敏（家目录路径、主机名、installationId、账号套餐与额度换成占位值），
 // 除此之外与 stdout 原样一致；消息结构、时间戳和 token 数字都没动过。
 //
@@ -286,12 +287,11 @@ test("噪音通知一条都不产生事件", () => {
   const noise = loadFixture().filter((message) =>
     [
       "mcpServer/startupStatus/updated",
-      "account/rateLimits/updated",
       "remoteControl/status/changed",
       "warning",
     ].includes(message.method ?? ""),
   );
-  assert.ok(noise.length >= 10, "录制里确实有这些噪音");
+  assert.ok(noise.length >= 8, "录制里确实有这些噪音");
   for (const message of noise) {
     assert.deepEqual(normalizer.normalize(message), []);
   }
@@ -300,6 +300,94 @@ test("噪音通知一条都不产生事件", () => {
   for (const message of responses) {
     assert.deepEqual(normalizer.normalize(message), []);
   }
+});
+
+test("录制里的 account/rateLimits/updated 翻成单桶额度快照", () => {
+  const normalizer = new CodexNormalizer({ now: () => 42 });
+  const updates = loadFixture().filter(
+    (message) => message.method === "account/rateLimits/updated",
+  );
+  assert.ok(updates.length >= 2, "录制里确实有额度通知");
+  const events = normalizer.normalize(updates[0]!);
+  assert.deepEqual(events, [
+    {
+      type: "quotaUpdated",
+      quota: {
+        agent: "codex",
+        planType: "placeholder",
+        windows: [
+          {
+            id: "codex/primary",
+            label: null,
+            usedPercent: 0,
+            windowDurationMins: 10080,
+            resetsAt: 1785267882,
+          },
+        ],
+        capturedAtMs: 42,
+      },
+    },
+  ]);
+});
+
+test("rateLimits/read 响应优先吃多桶视图，主桶排最前", () => {
+  const normalizer = new CodexNormalizer({ now: () => 42 });
+  // 形状取自 2026-07-26 对 0.144.4 的实测响应（值已脱敏）
+  const events = normalizer.normalizeRateLimitsRead({
+    rateLimits: {
+      limitId: "codex",
+      limitName: null,
+      primary: { usedPercent: 37, windowDurationMins: 10080, resetsAt: 1785640649 },
+      secondary: null,
+      planType: "pro",
+    },
+    rateLimitsByLimitId: {
+      codex_bengalfox: {
+        limitId: "codex_bengalfox",
+        limitName: "GPT-5.3-Codex-Spark",
+        primary: { usedPercent: 12, windowDurationMins: 10080, resetsAt: 1785642760 },
+        secondary: null,
+        planType: "pro",
+      },
+      codex: {
+        limitId: "codex",
+        limitName: null,
+        primary: { usedPercent: 37, windowDurationMins: 10080, resetsAt: 1785640649 },
+        secondary: null,
+        planType: "pro",
+      },
+    },
+  });
+  assert.equal(events.length, 1);
+  const event = events[0]!;
+  assert.ok(event.type === "quotaUpdated");
+  assert.equal(event.quota.planType, "pro");
+  assert.deepEqual(
+    event.quota.windows.map((window) => window.id),
+    ["codex/primary", "codex_bengalfox/primary"],
+  );
+  assert.equal(event.quota.windows[1]!.label, "GPT-5.3-Codex-Spark");
+});
+
+test("rateLimits/read 没有多桶视图时退回单桶，空响应不出事件", () => {
+  const normalizer = new CodexNormalizer({ now: () => 42 });
+  const single = normalizer.normalizeRateLimitsRead({
+    rateLimits: {
+      limitId: "codex",
+      primary: { usedPercent: 5, windowDurationMins: 300, resetsAt: 1785000000 },
+      secondary: { usedPercent: 61, windowDurationMins: 10080, resetsAt: 1785640649 },
+      planType: "plus",
+    },
+  });
+  assert.equal(single.length, 1);
+  const event = single[0]!;
+  assert.ok(event.type === "quotaUpdated");
+  assert.deepEqual(
+    event.quota.windows.map((window) => window.id),
+    ["codex/primary", "codex/secondary"],
+  );
+  assert.deepEqual(normalizer.normalizeRateLimitsRead({}), []);
+  assert.deepEqual(normalizer.normalizeRateLimitsRead(null), []);
 });
 
 test("userMessage 在 started 时就是终态，completed 不再产生补丁", () => {

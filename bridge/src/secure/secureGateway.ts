@@ -8,13 +8,18 @@ import { join } from "node:path";
 
 import { SecureChannelHost, type HostFrame, type PairingWindow } from "./channel.ts";
 import { loadTrustedPhones, saveTrustedPhones, type BridgeIdentity } from "../state/stateDir.ts";
-import type { AgentSession, BridgeEvent, ClientCommand } from "../protocol/events.ts";
+import type {
+  AgentQuotaSnapshot,
+  AgentSession,
+  BridgeEvent,
+  ClientCommand,
+} from "../protocol/events.ts";
 
 /** 把一个出站帧送回某台 phone 的传输回调,由各传输路径在 handleFrame 时注入 */
 export type FrameSink = (frame: HostFrame) => void;
 
 /**
- * gateway 只依赖 hub 的这四个能力,结构化声明而不是直接引 SessionHub,
+ * gateway 只依赖 hub 的这五个能力,结构化声明而不是直接引 SessionHub,
  * 测试就能用最小 stub 顶上。真 SessionHub 天然满足。
  */
 export interface GatewayHub {
@@ -22,6 +27,7 @@ export interface GatewayHub {
   handle(command: ClientCommand): Promise<void>;
   replay(sessionId: string, fromSeq: number): BridgeEvent[];
   listSessions(): AgentSession[];
+  latestQuota(): AgentQuotaSnapshot[];
 }
 
 export interface SecureGatewayOptions {
@@ -119,12 +125,18 @@ export class SecureGateway {
     this.#transports.clear();
   }
 
-  /** 与 /events 首连等价:每个已有会话补一条 seq=0 的 sessionCreated 快照 */
+  /** 与 /events 首连等价:每个已有会话补一条 seq=0 的 sessionCreated 快照 + 缓存额度 */
   #sendSnapshot(phoneDeviceId: string, sink: FrameSink): void {
     for (const session of this.#hub.listSessions()) {
       this.#sendToPhone(phoneDeviceId, sink, {
         t: "event",
         data: { type: "sessionCreated", seq: 0, session },
+      });
+    }
+    for (const quota of this.#hub.latestQuota()) {
+      this.#sendToPhone(phoneDeviceId, sink, {
+        t: "event",
+        data: { type: "quotaUpdated", seq: 0, quota },
       });
     }
   }

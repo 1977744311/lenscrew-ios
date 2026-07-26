@@ -184,6 +184,10 @@ export function createBridgeServer(options: BridgeServerOptions): Server {
         );
       }
     }
+    // 额度不进会话重放窗口，接入时单独补发缓存的最新快照
+    for (const quota of hub.latestQuota()) {
+      response.write(formatFrame({ type: "quotaUpdated", seq: 0, quota }));
+    }
   }
 
   function openE2eeStream(device: string, response: ServerResponse): void {

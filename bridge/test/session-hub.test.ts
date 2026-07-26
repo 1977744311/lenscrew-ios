@@ -262,3 +262,90 @@ test("adapter 启动失败作为致命错误上报，而不是让会话僵在启
   assert.equal(failure.fatal, true);
   assert.match(failure.message, /未安装/);
 });
+
+function windowOf(id: string, usedPercent: number) {
+  return { id, label: null, usedPercent, windowDurationMins: 10080, resetsAt: 1785640649 };
+}
+
+test("额度事件不占会话 seq，广播 seq 恒为 0 且可供接入补发", async () => {
+  const { hub, events, adapters } = makeHub();
+  await openSession(hub);
+  const before = hub.listSessions()[0]!.updatedAtMs;
+
+  adapters[0]!.sink({
+    type: "quotaUpdated",
+    quota: {
+      agent: "codex",
+      planType: "pro",
+      windows: [windowOf("codex/primary", 37)],
+      capturedAtMs: 100,
+    },
+  });
+  adapters[0]!.sink({
+    type: "blockAppended",
+    block: { kind: "agentMessage", id: "b1", text: "你好", streaming: true },
+  });
+
+  const quota = events.find((event) => event.type === "quotaUpdated");
+  assert.ok(quota && quota.type === "quotaUpdated");
+  assert.equal(quota.seq, 0);
+  // 会话 seq 没有被额度事件占号：sessionCreated=1、capabilitiesResolved=2、status=3，block 应是 4
+  const block = events.find((event) => event.type === "blockAppended");
+  assert.ok(block && block.type === "blockAppended");
+  assert.equal(block.seq, 4);
+  // 账号级事件不该动会话元数据
+  assert.equal(hub.listSessions()[0]!.updatedAtMs >= before, true);
+  assert.deepEqual(hub.latestQuota(), [
+    {
+      agent: "codex",
+      planType: "pro",
+      windows: [windowOf("codex/primary", 37)],
+      capturedAtMs: 100,
+    },
+  ]);
+});
+
+test("稀疏更新按窗口 id 合并进缓存，主桶窗口排最前", () => {
+  const { hub, events } = makeHub();
+  hub.ingestQuota({
+    agent: "codex",
+    planType: "pro",
+    windows: [windowOf("codex/primary", 10), windowOf("codex_bengalfox/primary", 5)],
+    capturedAtMs: 100,
+  });
+  // updated 通知只带模型桶：合并后主桶数字保留、模型桶更新
+  hub.ingestQuota({
+    agent: "codex",
+    planType: null,
+    windows: [windowOf("codex_bengalfox/primary", 30)],
+    capturedAtMs: 200,
+  });
+
+  const merged = hub.latestQuota()[0]!;
+  assert.equal(merged.planType, "pro");
+  assert.deepEqual(
+    merged.windows.map((window) => [window.id, window.usedPercent]),
+    [
+      ["codex/primary", 10],
+      ["codex_bengalfox/primary", 30],
+    ],
+  );
+  assert.equal(merged.capturedAtMs, 200);
+  assert.equal(events.filter((event) => event.type === "quotaUpdated").length, 2);
+});
+
+test("内容没变只刷新缓存时间戳，不再广播", () => {
+  const { hub, events } = makeHub();
+  const snapshot = {
+    agent: "codex" as const,
+    planType: "pro",
+    windows: [windowOf("codex/primary", 37)],
+    capturedAtMs: 100,
+  };
+  hub.ingestQuota(snapshot);
+  hub.ingestQuota({ ...snapshot, capturedAtMs: 999 });
+
+  assert.equal(events.filter((event) => event.type === "quotaUpdated").length, 1);
+  // 新客户端接入补发时应拿到最新的采集时间，而不是被去重丢掉
+  assert.equal(hub.latestQuota()[0]!.capturedAtMs, 999);
+});

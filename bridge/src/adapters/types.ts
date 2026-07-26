@@ -1,6 +1,7 @@
 import type {
   AgentCapabilities,
   AgentKind,
+  AgentQuotaSnapshot,
   ApprovalOutcome,
   ApprovalRequest,
   SessionMode,
@@ -38,6 +39,11 @@ export type AdapterEvent =
       cachedInputTokens: number | null;
       stopReason: TurnStopReason | null;
     }
+  /**
+   * 账号级额度快照（可能只含部分桶——codex 的 updated 通知是稀疏的）。
+   * SessionHub 不给它编号也不进会话日志，而是并入 host 级缓存后另行广播。
+   */
+  | { type: "quotaUpdated"; quota: AgentQuotaSnapshot }
   | { type: "error"; message: string; fatal: boolean };
 
 /**

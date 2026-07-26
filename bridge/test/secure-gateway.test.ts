@@ -26,7 +26,12 @@ import {
   type EncryptedEnvelope,
 } from "../src/secure/crypto.ts";
 import type { BridgeIdentity } from "../src/state/stateDir.ts";
-import type { AgentSession, BridgeEvent, ClientCommand } from "../src/protocol/events.ts";
+import type {
+  AgentQuotaSnapshot,
+  AgentSession,
+  BridgeEvent,
+  ClientCommand,
+} from "../src/protocol/events.ts";
 
 const NOW = 1700000000000;
 
@@ -61,6 +66,12 @@ class FakeHub implements GatewayHub {
 
   listSessions(): AgentSession[] {
     return this.sessions;
+  }
+
+  quota: AgentQuotaSnapshot[] = [];
+
+  latestQuota(): AgentQuotaSnapshot[] {
+    return this.quota;
   }
 
   emit(event: BridgeEvent): void {

@@ -7,6 +7,7 @@ import { join } from "node:path";
 
 import { defaultAdapterFactory } from "../src/adapters/registry.ts";
 import { SessionHub } from "../src/session/hub.ts";
+import { startQuotaProbe } from "../src/session/quotaProbe.ts";
 import { createBridgeServer } from "../src/transport/server.ts";
 import { createRelayServer } from "../src/relay/relayServer.ts";
 import { startRelayClient } from "../src/relay/relayClient.ts";
@@ -322,6 +323,11 @@ async function runUp(options: UpOptions): Promise<void> {
   }
 
   const stopPushBridge = startPushBridge(hub, stateDir, identity.macDeviceId);
+  // 闲时也保持 codex 额度可读：手表表盘/小组件依赖它，会话喂着数据时会自动跳过
+  const quotaProbe = startQuotaProbe({
+    hub,
+    log: (line) => process.stdout.write(`  ${line}\n`),
+  });
   // 用手机 App「添加电脑」扫这个码即完成 E2EE 配对
   printPairingQr(pairPayload());
 
@@ -340,6 +346,7 @@ async function runUp(options: UpOptions): Promise<void> {
     if (shuttingDown) return;
     shuttingDown = true;
     stopPushBridge();
+    quotaProbe.close();
     relayClient?.close();
     gateway.close();
     server.close();

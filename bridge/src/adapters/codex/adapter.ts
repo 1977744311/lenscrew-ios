@@ -109,6 +109,17 @@ export class CodexAdapter implements AgentAdapter {
     // initialize 之后必须发这条通知，否则 app-server 不会开始推送会话通知
     this.#notify("initialized");
 
+    // 账号额度主动拉一次：updated 通知只在 turn 期间才来，不拉的话
+    // 会话一开手机上额度就是空的。fire-and-forget——旧版 codex 没有
+    // 这个方法，失败只代表额度不可用，不能拖垮会话启动。
+    void this.#request("account/rateLimits/read", {})
+      .then((result) => {
+        for (const event of this.#normalizer.normalizeRateLimitsRead(result)) {
+          this.#sink(event);
+        }
+      })
+      .catch(() => {});
+
     const { approvalPolicy, sandbox } = this.#policyFor(options.mode);
     if (options.resumeNativeId !== null) {
       const params: CodexThreadResumeParams = {

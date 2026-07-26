@@ -50,7 +50,7 @@ public struct CrewStore: Sendable, Equatable {
         }
 
         guard let sessionID = event.sessionID else {
-            // 无会话归属的致命错误，交给上层展示，不进任何会话
+            // 无会话归属的事件（致命 bridgeError、账号额度）交给上层，不进任何会话
             return .applied
         }
         guard var state = sessions[sessionID] else {
@@ -105,6 +105,10 @@ public struct CrewStore: Sendable, Equatable {
         case let .bridgeError(_, _, message, fatal):
             state.blocks.append(.error(id: "err-\(event.seq)", message: message))
             if fatal { state.session.status = .error }
+
+        case .quotaUpdated:
+            // 账号级事件 sessionID 恒为 nil，在上面的 guard 就返回了；此分支只为穷举
+            break
         }
 
         sessions[sessionID] = state

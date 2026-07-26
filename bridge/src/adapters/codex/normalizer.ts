@@ -8,6 +8,7 @@ import type {
   BlockStatus,
   FileChangeSummary,
   PlanStep,
+  QuotaWindow,
   SessionStatus,
   TranscriptBlock,
   TranscriptBlockPatch,
@@ -15,6 +16,7 @@ import type {
 } from "../../protocol/events.ts";
 import type { AdapterEvent, ProtocolNormalizer } from "../types.ts";
 import type {
+  CodexAccountRateLimitsUpdatedParams,
   CodexApplyPatchApprovalParams,
   CodexCommandExecutionApprovalDecision,
   CodexCommandExecutionRequestApprovalParams,
@@ -24,6 +26,7 @@ import type {
   CodexFileChangePatchUpdatedParams,
   CodexFileChangeRequestApprovalParams,
   CodexFileUpdateChange,
+  CodexGetAccountRateLimitsResponse,
   CodexIncomingMessage,
   CodexItemCompletedParams,
   CodexItemDeltaParams,
@@ -32,6 +35,7 @@ import type {
   CodexMcpToolCallError,
   CodexMcpToolCallResult,
   CodexPermissionsRequestApprovalParams,
+  CodexRateLimitSnapshot,
   CodexRequestId,
   CodexServerRequestMethod,
   CodexServerRequestResolvedParams,
@@ -203,6 +207,45 @@ function stopReasonFor(turn: CodexTurn | undefined): TurnStopReason | null {
   }
 }
 
+/**
+ * 额度桶 → 契约窗口。窗口 id 用 `<limitId>/<primary|secondary>`，
+ * 跨快照稳定，hub 靠它做稀疏更新的合并。
+ */
+function quotaWindows(
+  buckets: Iterable<[string, CodexRateLimitSnapshot]>,
+): QuotaWindow[] {
+  const windows: QuotaWindow[] = [];
+  for (const [limitId, bucket] of buckets) {
+    const slots = [
+      ["primary", bucket.primary],
+      ["secondary", bucket.secondary],
+    ] as const;
+    for (const [slot, window] of slots) {
+      if (window == null) continue;
+      windows.push({
+        id: `${limitId}/${slot}`,
+        label: bucket.limitName ?? null,
+        usedPercent: window.usedPercent,
+        windowDurationMins: window.windowDurationMins ?? null,
+        resetsAt: window.resetsAt ?? null,
+      });
+    }
+  }
+  return windows;
+}
+
+/** 主桶 "codex" 排最前，其余按 limitId 字典序，保证事件序列可复现 */
+function sortedBuckets(
+  entries: [string, CodexRateLimitSnapshot][],
+): [string, CodexRateLimitSnapshot][] {
+  return entries.sort(([a], [b]) => {
+    if (a === b) return 0;
+    if (a === "codex") return -1;
+    if (b === "codex") return 1;
+    return a < b ? -1 : 1;
+  });
+}
+
 /** 眼镜屏一行放不下整条命令/整段计划，标题和摘要都只取第一行并截断 */
 function firstLine(text: string): string {
   const line = text.split("\n")[0] ?? "";
@@ -338,12 +381,49 @@ export class CodexNormalizer
         return this.#serverRequestResolved(
           message.params as CodexServerRequestResolvedParams,
         );
+      case "account/rateLimits/updated": {
+        // 稀疏滚动更新：只带一个桶，合并成全量的活交给 hub
+        const params = message.params as CodexAccountRateLimitsUpdatedParams;
+        const bucket = params.rateLimits;
+        if (bucket == null) return [];
+        return this.#quota([[bucket.limitId ?? "codex", bucket]]);
+      }
       case "error":
         return this.#error(message.params as CodexErrorParams);
       default:
-        // 账号额度、MCP 启动状态、远程控制、废弃提示等与会话流水无关的通知一律丢弃
+        // MCP 启动状态、远程控制、废弃提示等与会话流水无关的通知一律丢弃
         return [];
     }
+  }
+
+  /**
+   * `account/rateLimits/read` 的响应走这里（响应不带 method，normalize 认不出）。
+   * 多桶视图优先——实测它连主桶一起给全了；老版本没有多桶时退回单桶。
+   */
+  normalizeRateLimitsRead(result: unknown): AdapterEvent[] {
+    if (result === null || typeof result !== "object") return [];
+    const response = result as CodexGetAccountRateLimitsResponse;
+    const byId = response.rateLimitsByLimitId;
+    if (byId != null && Object.keys(byId).length > 0) {
+      return this.#quota(Object.entries(byId));
+    }
+    const single = response.rateLimits;
+    if (single == null) return [];
+    return this.#quota([[single.limitId ?? "codex", single]]);
+  }
+
+  #quota(entries: [string, CodexRateLimitSnapshot][]): AdapterEvent[] {
+    const buckets = sortedBuckets(entries);
+    const windows = quotaWindows(buckets);
+    if (windows.length === 0) return [];
+    const planType =
+      buckets.map(([, bucket]) => bucket.planType).find((plan) => plan != null) ?? null;
+    return [
+      {
+        type: "quotaUpdated",
+        quota: { agent: "codex", planType, windows, capturedAtMs: this.#now() },
+      },
+    ];
   }
 
   /**
