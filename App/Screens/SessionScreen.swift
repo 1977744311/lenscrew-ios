@@ -276,35 +276,39 @@ struct SessionScreen: View {
 
     /// 思考：细行，可点展开全文。事件里没有耗时，不写「N 秒」。
     /// 有的模型/配置不外发思考内容（codex 的 summary 可能为空）——
-    /// 没有内容就不给展开箭头，免得点开一片空白。
+    /// 没有内容就渲染成静态行：不给展开箭头，也不能包成禁用按钮，
+    /// 禁用态会把本就 34% 透明的细字再调暗一层，直接沉进黑背景。
+    @ViewBuilder
     private func reasoningRow(id: String, text: String, streaming: Bool) -> some View {
-        let expandable = !text.isEmpty
-        return VStack(alignment: .leading, spacing: 6) {
-            Button {
-                if expandedReasoning.contains(id) {
-                    expandedReasoning.remove(id)
-                } else {
-                    expandedReasoning.insert(id)
-                }
-            } label: {
-                thinRow {
-                    if expandable {
+        if text.isEmpty {
+            thinRow {
+                Text(streaming ? "思考中…" : "思考")
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 6) {
+                Button {
+                    if expandedReasoning.contains(id) {
+                        expandedReasoning.remove(id)
+                    } else {
+                        expandedReasoning.insert(id)
+                    }
+                } label: {
+                    thinRow {
                         Image(systemName: "chevron.right")
                             .font(.system(size: 9, weight: .bold))
                             .rotationEffect(.degrees(expandedReasoning.contains(id) ? 90 : 0))
+                        Text(streaming ? "思考中…" : "思考")
                     }
-                    Text(streaming ? "思考中…" : "思考")
                 }
-            }
-            .buttonStyle(.plain)
-            .disabled(!expandable)
-            if expandable, expandedReasoning.contains(id) {
-                Text(streaming ? text + "▍" : text)
-                    .font(.system(size: 13))
-                    .lineSpacing(4)
-                    .foregroundStyle(LC.text2)
-                    .textSelection(.enabled)
-                    .padding(.leading, 16)
+                .buttonStyle(.plain)
+                if expandedReasoning.contains(id) {
+                    Text(streaming ? text + "▍" : text)
+                        .font(.system(size: 13))
+                        .lineSpacing(4)
+                        .foregroundStyle(LC.text2)
+                        .textSelection(.enabled)
+                        .padding(.leading, 16)
+                }
             }
         }
     }
