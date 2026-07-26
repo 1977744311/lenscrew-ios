@@ -98,6 +98,21 @@ private func waitUntil(
     return await condition()
 }
 
+/// 测试自备仓库用的 git 调用，与被测代码无共享
+private func runGit(in root: URL, _ arguments: String...) throws {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    process.arguments = ["git"] + arguments
+    process.currentDirectoryURL = root
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = FileHandle.nullDevice
+    try process.run()
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else {
+        throw BridgeProcessError.didNotBecomeReady
+    }
+}
+
 // 串行跑：每个用例都要起一个 bridge 进程。加时限是因为这里的失败模式多半是"挂住"
 // 而不是"断言不过"，没有时限就会拖死整个测试轮次。
 @Suite(.serialized, .timeLimit(.minutes(2)))
@@ -256,6 +271,60 @@ struct EndToEndTests {
         #expect(await waitUntil(timeout: .seconds(10)) { await !log.events.isEmpty })
         let elapsed = start.duration(to: .now)
         #expect(elapsed < .seconds(3), "首个事件用了 \(elapsed)，八成又在等心跳")
+
+        await connection.disconnect()
+    }
+
+    @Test("真 HTTP 上 git 面板拿到真实仓库的状态并执行暂存")
+    func servesGitPanelOverHTTP() async throws {
+        let bridge = try BridgeProcess()
+        defer { bridge.stop() }
+
+        // 一次性真仓库：一个已提交文件 + 一处工作区修改 + 一个 untracked 文件
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lenscrew-git-e2e-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try runGit(in: root, "init", "-b", "main")
+        try runGit(in: root, "config", "user.name", "Tester")
+        try runGit(in: root, "config", "user.email", "tester@example.com")
+        try runGit(in: root, "config", "commit.gpgsign", "false")
+        try Data("# demo\n".utf8).write(to: root.appendingPathComponent("README.md"))
+        try runGit(in: root, "add", "-A")
+        try runGit(in: root, "commit", "-m", "initial")
+        try Data("# demo changed\n".utf8).write(to: root.appendingPathComponent("README.md"))
+        try Data("loose\n".utf8).write(to: root.appendingPathComponent("loose.txt"))
+
+        let connection = HTTPBridgeConnection(endpoint: bridge.endpoint)
+        try await connection.connect()
+
+        let outcome = try await connection.git(.status(root: root.path))
+        guard case let .status(status) = outcome else {
+            Issue.record("status 请求没有返回 status 载荷：\(outcome)")
+            return
+        }
+        #expect(status.branch == "main")
+        #expect(status.staged.isEmpty)
+        #expect(
+            status.unstaged.map(\.path).sorted() == ["README.md", "loose.txt"],
+            "工作区改动没有如实列出"
+        )
+
+        // 写操作走同一条链路：全部暂存后 staged/unstaged 应当互换
+        _ = try await connection.git(.stage(root: root.path, paths: []))
+        let staged = try await connection.git(.status(root: root.path))
+        guard case let .status(after) = staged else {
+            Issue.record("暂存后的 status 请求没有返回 status 载荷")
+            return
+        }
+        #expect(after.staged.map(\.path).sorted() == ["README.md", "loose.txt"])
+        #expect(after.unstaged.isEmpty)
+
+        // 失败路径：非 git 目录的错误信息原样透传给调用方
+        await #expect(throws: BridgeLinkError.self) {
+            _ = try await connection.git(
+                .status(root: FileManager.default.temporaryDirectory.path))
+        }
 
         await connection.disconnect()
     }

@@ -270,6 +270,12 @@ final class HostLink: Identifiable {
         Task { [coordinator] in await coordinator?.setAutoPresentApprovals(enabled) }
     }
 
+    /// git 面板的请求出口：直接走本主机连接的请求-应答通道，不经会话协调层
+    func git(_ request: GitRequest) async throws -> GitOutcome {
+        guard let connection else { throw BridgeLinkError.notConnected }
+        return try await connection.git(request)
+    }
+
     /// 幂等重发：token 到达、开关变化、连接（重）建立都整体发一次。
     /// manual 主机没有 registerPush 通道（secureConnection 为 nil），静默跳过。
     func sendPushRegistration() async {

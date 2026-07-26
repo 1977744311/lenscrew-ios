@@ -133,10 +133,48 @@ public final class HTTPBridgeConnection: BridgeConnecting, @unchecked Sendable {
         }
     }
 
+    public func git(_ request: GitRequest) async throws -> GitOutcome {
+        var urlRequest = URLRequest(url: endpoint.baseURL.appendingPathComponent("git"))
+        urlRequest.httpMethod = "POST"
+        urlRequest.setValue("Bearer \(endpoint.token)", forHTTPHeaderField: "Authorization")
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.httpBody = try JSONEncoder().encode(request)
+        // push/pull 在 bridge 侧上限 120s；controlSession 的 resource 上限只有 30s，
+        // 会把长操作掐断，所以这里走没有 resource 上限的流会话
+        urlRequest.timeoutInterval = 150
+
+        let (data, response) = try await streamSession.data(for: urlRequest)
+        guard let http = response as? HTTPURLResponse else {
+            throw BridgeLinkError.transport("响应不是 HTTP")
+        }
+        guard http.statusCode == 200 else {
+            throw BridgeLinkError.transport("HTTP \(http.statusCode)")
+        }
+        let reply: GitReply
+        do {
+            reply = try JSONDecoder().decode(GitReply.self, from: data)
+        } catch {
+            throw BridgeLinkError.decoding("git 应答解析失败")
+        }
+        guard reply.ok else {
+            throw BridgeLinkError.transport(reply.error ?? "bridge 拒绝了 git 请求")
+        }
+        guard let outcome = reply.git else {
+            throw BridgeLinkError.decoding("git 应答缺少结果载荷")
+        }
+        return outcome
+    }
+
     // MARK: - 内部
 
     private struct SubscribeReply: Decodable {
         let events: [BridgeEvent]
+    }
+
+    private struct GitReply: Decodable {
+        let ok: Bool
+        let git: GitOutcome?
+        let error: String?
     }
 
     private func checkHealth() async throws {

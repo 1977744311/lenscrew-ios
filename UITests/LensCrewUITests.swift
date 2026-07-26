@@ -119,4 +119,39 @@ final class LensCrewUITests: XCTestCase {
         // 600×600 是 DAT 硬约束，约束 chip 必须在场
         XCTAssertTrue(app.staticTexts["600 × 600"].firstMatch.exists)
     }
+
+    @MainActor
+    func testGitPanelShowsStatusAndOpensDiff() {
+        let app = launchApp()
+
+        // 进会话页 → 导航头的 git 入口
+        XCTAssertTrue(
+            element(app, "home.approvalCard").waitForExistence(timeout: 15),
+            "夹具审批卡没有出现在指挥台"
+        )
+        element(app, "home.approval.context").tap()
+        XCTAssertTrue(
+            element(app, "session.gitPanel").waitForExistence(timeout: 10),
+            "会话页导航头缺 git 面板入口"
+        )
+        element(app, "session.gitPanel").tap()
+
+        // 面板：分支名、暂存/工作区文件行都来自夹具脚本
+        let branch = element(app, "git.branch")
+        XCTAssertTrue(branch.waitForExistence(timeout: 10), "git 面板没显示分支")
+        XCTAssertEqual(branch.label, "main")
+        XCTAssertTrue(
+            element(app, "git.file.Sources/App/Login.swift").waitForExistence(timeout: 10),
+            "已暂存文件行缺席"
+        )
+        XCTAssertTrue(element(app, "git.file.README.md").exists, "工作区文件行缺席")
+        XCTAssertTrue(element(app, "git.commit").exists, "提交按钮缺席")
+
+        // 点工作区文件行 → diff sheet 展示夹具 diff 的内容
+        element(app, "git.file.README.md").tap()
+        XCTAssertTrue(
+            app.staticTexts["+new line"].firstMatch.waitForExistence(timeout: 10),
+            "diff sheet 没展示新增行"
+        )
+    }
 }

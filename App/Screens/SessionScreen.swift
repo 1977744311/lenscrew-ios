@@ -12,6 +12,10 @@ struct SessionScreen: View {
     @State private var expandedReasoning: Set<String> = []
     @State private var expandedShells: Set<String> = []
     @State private var presentedApproval: ApprovalPresentation?
+    @State private var gitRoute: GitRoute?
+    @State private var dictation = SpeechDictation()
+    /// 听写开始时的草稿快照；识别的 partial 结果整段替换其后的部分
+    @State private var dictationBase = ""
 
     private var state: SessionState? {
         model.sessionState(for: sessionKey)
@@ -35,6 +39,9 @@ struct SessionScreen: View {
         .sheet(item: $presentedApproval) { presentation in
             ApprovalSheet(model: model, presentation: presentation)
         }
+        .fullScreenCover(item: $gitRoute) { route in
+            GitScreen(model: model, route: route)
+        }
         // 新审批到达自动弹 sheet；结清（approvalSettled）才撤，不做乐观关闭
         .onChange(of: pendingIDs) { old, new in
             if let presented = presentedApproval, !new.contains(presented.approval.id) {
@@ -45,6 +52,12 @@ struct SessionScreen: View {
                 presentApproval(id: freshID)
             }
         }
+        // 听写的 partial 结果是全量替换式：草稿 = 开始时的快照 + 当前识别文本
+        .onChange(of: dictation.transcript) { _, transcript in
+            guard dictation.isListening || !transcript.isEmpty else { return }
+            draft = dictationBase + transcript
+        }
+        .onDisappear { dictation.cancel() }
     }
 
     private func content(_ state: SessionState) -> some View {
@@ -96,11 +109,31 @@ struct SessionScreen: View {
                 }
             }
             Spacer()
+            gitButton(state)
             glassesButton
         }
         .padding(.horizontal, 16)
         .padding(.top, 4)
         .padding(.bottom, 10)
+    }
+
+    /// git 操作面板入口：仓库即会话的 workspaceRoot
+    private func gitButton(_ state: SessionState) -> some View {
+        Button {
+            gitRoute = GitRoute(
+                hostID: sessionKey.hostID,
+                workspaceRoot: state.session.workspaceRoot
+            )
+        } label: {
+            Image(systemName: "arrow.triangle.branch")
+                .font(.system(size: 15))
+                .foregroundStyle(LC.text2)
+                .frame(width: 34, height: 34)
+                .background(LC.elev, in: Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("git 面板")
+        .accessibilityIdentifier("session.gitPanel")
     }
 
     /// 眼镜挂载状态入口：绿=已挂载
@@ -554,44 +587,60 @@ struct SessionScreen: View {
     private func composer(_ state: SessionState) -> some View {
         let running = state.session.status == .running
         let draftEmpty = draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        return HStack(spacing: 8) {
-            if let mode = model.sessionMode(for: sessionKey) {
-                LCChip(fontSize: 11.5) {
-                    Text(mode == .plan ? "计划 · 只读" : "默认")
+        return VStack(spacing: 5) {
+            if let hint = dictation.lastError {
+                HStack(spacing: 5) {
+                    Image(systemName: "mic.slash").font(.system(size: 10))
+                    Text(hint).font(.system(size: 11.5))
+                    Spacer()
                 }
+                .foregroundStyle(LC.red)
+                .padding(.horizontal, 6)
             }
-            TextField("追加指令，运行中也可排队…", text: $draft, axis: .vertical)
+            HStack(spacing: 8) {
+                if let mode = model.sessionMode(for: sessionKey) {
+                    LCChip(fontSize: 11.5) {
+                        Text(mode == .plan ? "计划 · 只读" : "默认")
+                    }
+                }
+                TextField(
+                    dictation.isListening ? "正在听写…" : "追加指令，运行中也可排队…",
+                    text: $draft, axis: .vertical
+                )
                 .font(.system(size: 15))
                 .foregroundStyle(LC.text)
                 .lineLimit(1...4)
-            // 运行中且没在打字 → 中断钮；其余情况 → 发送钮（运行中也可排队）
-            if running, draftEmpty {
-                Button {
-                    Task { await model.interrupt(sessionKey) }
-                } label: {
-                    Image(systemName: "square.fill")
-                        .font(.system(size: 12))
-                        .foregroundStyle(.white)
-                        .frame(width: 34, height: 34)
-                        .background(LC.red, in: Circle())
+                micButton
+                // 运行中且没在打字 → 中断钮；其余情况 → 发送钮（运行中也可排队）
+                if running, draftEmpty, !dictation.isListening {
+                    Button {
+                        Task { await model.interrupt(sessionKey) }
+                    } label: {
+                        Image(systemName: "square.fill")
+                            .font(.system(size: 12))
+                            .foregroundStyle(.white)
+                            .frame(width: 34, height: 34)
+                            .background(LC.red, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("中断")
+                } else {
+                    Button {
+                        dictation.cancel()
+                        let text = draft
+                        draft = ""
+                        Task { await model.send(text, to: sessionKey) }
+                    } label: {
+                        Image(systemName: "arrow.up")
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundStyle(.white)
+                            .frame(width: 34, height: 34)
+                            .background(draftEmpty ? LC.elev2 : LC.blue, in: Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(draftEmpty)
+                    .accessibilityLabel("发送")
                 }
-                .buttonStyle(.plain)
-                .accessibilityLabel("中断")
-            } else {
-                Button {
-                    let text = draft
-                    draft = ""
-                    Task { await model.send(text, to: sessionKey) }
-                } label: {
-                    Image(systemName: "arrow.up")
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundStyle(.white)
-                        .frame(width: 34, height: 34)
-                        .background(draftEmpty ? LC.elev2 : LC.blue, in: Circle())
-                }
-                .buttonStyle(.plain)
-                .disabled(draftEmpty)
-                .accessibilityLabel("发送")
             }
         }
         .padding(.leading, 14)
@@ -601,5 +650,30 @@ struct SessionScreen: View {
         .overlay(
             RoundedRectangle(cornerRadius: 24).strokeBorder(LC.line, lineWidth: 0.5)
         )
+    }
+
+    /// 语音输入：点一下开始听写、再点结束。识别文本实时进草稿，发送仍由发送键决定
+    private var micButton: some View {
+        Button {
+            if dictation.isListening {
+                dictation.stop()
+            } else {
+                dictationBase = draft.isEmpty ? "" : draft + " "
+                dictation.start()
+            }
+        } label: {
+            Image(systemName: dictation.isListening ? "waveform" : "mic")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(dictation.isListening ? .white : LC.text2)
+                .frame(width: 34, height: 34)
+                .background(dictation.isListening ? LC.red : .clear, in: Circle())
+                .symbolEffect(
+                    .variableColor.iterative, options: .repeating,
+                    isActive: dictation.isListening
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(dictation.isListening ? "结束听写" : "语音输入")
+        .accessibilityIdentifier("session.dictation")
     }
 }

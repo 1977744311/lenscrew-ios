@@ -171,4 +171,58 @@ final class FixtureBridgeConnection: BridgeConnecting, @unchecked Sendable {
             ),
         ]
     }
+
+    // MARK: - git 面板脚本
+
+    static let gitBranch = "main"
+    static let gitStagedPath = "Sources/App/Login.swift"
+    static let gitUnstagedPath = "README.md"
+    static let gitUntrackedPath = "notes/todo.md"
+
+    /// 无状态脚本：UI 自动化只断言面板展示，不模拟操作后的状态迁移
+    func git(_ request: GitRequest) async throws -> GitOutcome {
+        switch request {
+        case .status:
+            return .status(
+                GitStatusSummary(
+                    branch: Self.gitBranch, upstream: "origin/main", ahead: 1, behind: 0,
+                    staged: [
+                        GitFileChange(path: Self.gitStagedPath, code: "M", oldPath: nil)
+                    ],
+                    unstaged: [
+                        GitFileChange(path: Self.gitUnstagedPath, code: "M", oldPath: nil),
+                        GitFileChange(path: Self.gitUntrackedPath, code: "?", oldPath: nil),
+                    ],
+                    stashCount: 1
+                ))
+        case .diff:
+            return .diff(
+                text: """
+                diff --git a/README.md b/README.md
+                --- a/README.md
+                +++ b/README.md
+                @@ -1,2 +1,2 @@
+                 # demo
+                -old line
+                +new line
+                """,
+                truncated: false
+            )
+        case .log:
+            return .log(entries: [
+                GitLogEntry(
+                    sha: "0c1ce66f2b3a4d5e6f708192a3b4c5d6e7f80912",
+                    subject: "Fix login flow", author: "Fixture", timeMs: Self.baseMs
+                ),
+                GitLogEntry(
+                    sha: "e4839962c3d4e5f60718293a4b5c6d7e8f901234",
+                    subject: "Initial commit", author: "Fixture", timeMs: Self.baseMs - 3_600_000
+                ),
+            ])
+        case .branches:
+            return .branches(current: Self.gitBranch, local: ["feature/login", "main"])
+        case .stage, .unstage, .discard, .commit, .push, .pull, .checkout, .stash, .stashPop:
+            return .done(detail: "")
+        }
+    }
 }

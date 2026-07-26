@@ -44,4 +44,6 @@ final class BridgeConnectionTap: BridgeConnecting, @unchecked Sendable {
     }
 
     func send(_ command: ClientCommand) async throws { try await base.send(command) }
+
+    func git(_ request: GitRequest) async throws -> GitOutcome { try await base.git(request) }
 }

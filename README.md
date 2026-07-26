@@ -22,12 +22,12 @@
 - **远程接入（脱离 VPN）**：二维码配对 + 端到端加密 + 自架 relay 中继；局域网直连与中继同协议，直连优先、失败回退中继
 - **APNs 推送**：bridge 直连 Apple（token-based .p8，JWT over HTTP/2）；审批到达与轮次完成即使 App 在后台 SSE 已断也能唤起；审批推送带「允许一次 / 拒绝」可操作按钮，锁屏直接裁决
 - **多 Mac**：手机存多台主机（每台一条 Keychain 口令与公钥记录），设置页切换，会话列表标注归属；支持同时保持多条连接、跨主机聚合会话与合并审批队列
+- **git 操作面板**：会话页一键进入所属仓库——分支 / ahead-behind / stash 一眼可见，暂存区与工作区文件按行看 diff（untracked 也给全新增 diff），暂存 / 取消暂存 / 丢弃、提交、推拉、切换与新建分支、stash 都在手机上完成；pull 恒为 `--ff-only`，收不了的冲突原样透传 git 的话，不在手机上制造复杂状态
+- **手机端语音输入**：composer 麦克风一点即听写（Speech framework，语言跟随系统），识别文本实时进草稿、发送仍由发送键决定；手表端的听写追加指令同样可用
 - **开源自建分发**：不发 iOS 安装包，源码自建（见[分发模式](#分发模式为什么不发安装包)）
 
 ## Roadmap
 
-- git 操作面板：在手机上查看仓库状态 / diff 并执行常用 git 操作
-- 手机端语音输入（手表端听写追加指令已可用）
 - 手机端额度展示：额度数据已进 App 层，指挥台 / 设置页尚未渲染
 - Claude / Cursor 账号额度：两家目前都没有程序化通道（Claude 的 stream-json 只给 token 用量，Cursor ACP 的 usage_update 是上下文占用而非额度），待上游暴露再接
 - 真机验证：眼镜依赖 Meta Wearables Developer Center 注册与固件 / Meta AI App 版本（见 [眼镜自建](docs/glasses-self-build.md)）；手表 app group 与 APNs 推送在真机上需要开发者账号签名
@@ -141,6 +141,7 @@ protocol/fixtures/     TS 与 Swift 共用的黄金样本，两侧测试都消�
 bridge/                Mac bridge（Node，零运行时依赖）
   src/protocol/        统一契约（线上格式的判定权在这里）
   src/adapters/        三个运行时的 adapter，差异只允许存在于此
+  src/git/             git 操作面板的执行侧（execFile 真 git，无 shell 展开）
   src/secure/          E2EE：握手状态机与密码学纯函数
   src/relay/           自架中继的服务端与 bridge 侧客户端
   src/push/            APNs：配置、HTTP/2 客户端、推送决策

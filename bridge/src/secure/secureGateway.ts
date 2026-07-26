@@ -14,6 +14,8 @@ import type {
   BridgeEvent,
   ClientCommand,
 } from "../protocol/events.ts";
+import type { GitRequest } from "../protocol/git.ts";
+import { runGitRequest, type GitRunner } from "../git/service.ts";
 
 /** 把一个出站帧送回某台 phone 的传输回调,由各传输路径在 handleFrame 时注入 */
 export type FrameSink = (frame: HostFrame) => void;
@@ -38,17 +40,20 @@ export interface SecureGatewayOptions {
   displayName: string;
   pairingWindow: PairingWindow;
   now?: () => number;
+  /** git 面板的执行器；缺省用真 git，测试注入 stub */
+  gitRunner?: GitRunner;
 }
 
 // MARK: - 通道内协议(明文层,双方向都是单行 JSON)
 //
 // phone → mac:
 //   { t: "cmd", id, data: <ClientCommand> }
+//   { t: "git", id, data: <GitRequest> }
 //   { t: "push-register", deviceToken, environment, alertsEnabled }
 // mac → phone:
-//   { t: "reply", id, ok: true, events? }   cmd 的应答,subscribe 附带补发事件
+//   { t: "reply", id, ok: true, events?, git? }   cmd 的应答,subscribe 附带补发事件,git 附带执行结果
 //   { t: "reply", id, ok: false, error }
-//   { t: "event", data: <BridgeEvent> }     hub 事件广播 + 会话快照
+//   { t: "event", data: <BridgeEvent> }           hub 事件广播 + 会话快照
 
 const PUSH_TOKENS_FILE = "push-tokens.json";
 
@@ -79,6 +84,7 @@ export class SecureGateway {
   readonly #hub: GatewayHub;
   readonly #stateDir: string;
   readonly #now: () => number;
+  readonly #gitRunner: GitRunner;
   readonly #unsubscribe: () => void;
   /** 每台已握手 phone 最近一次使用的传输路径,hub 事件经它下发 */
   readonly #transports = new Map<string, FrameSink>();
@@ -87,6 +93,7 @@ export class SecureGateway {
     this.#hub = options.hub;
     this.#stateDir = options.stateDir;
     this.#now = options.now ?? Date.now;
+    this.#gitRunner = options.gitRunner ?? runGitRequest;
     this.#host = new SecureChannelHost({
       identity: options.identity,
       trustedPhones: {
@@ -166,9 +173,37 @@ export class SecureGateway {
       await this.#handleCommand(phoneDeviceId, sink, message);
       return;
     }
+    if (message["t"] === "git") {
+      await this.#handleGit(phoneDeviceId, sink, message);
+      return;
+    }
     if (message["t"] === "push-register") {
       this.#handlePushRegister(phoneDeviceId, message);
       return;
+    }
+  }
+
+  /** git 请求-应答：结果只回发起的这台手机,不进事件广播 */
+  async #handleGit(
+    phoneDeviceId: string,
+    sink: FrameSink,
+    message: Record<string, unknown>,
+  ): Promise<void> {
+    const id = message["id"];
+    try {
+      const request = message["data"] as GitRequest;
+      if (typeof request !== "object" || request === null) {
+        throw new Error("git.data must be a GitRequest object");
+      }
+      const outcome = await this.#gitRunner(request);
+      this.#sendToPhone(phoneDeviceId, sink, { t: "reply", id, ok: true, git: outcome });
+    } catch (error) {
+      this.#sendToPhone(phoneDeviceId, sink, {
+        t: "reply",
+        id,
+        ok: false,
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 

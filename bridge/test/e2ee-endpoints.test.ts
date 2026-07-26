@@ -35,6 +35,7 @@ import type {
   BridgeEvent,
   ClientCommand,
 } from "../src/protocol/events.ts";
+import type { GitRunner } from "../src/git/service.ts";
 
 const TOKEN = "e2ee-test-token";
 
@@ -99,7 +100,7 @@ interface Harness {
   gateway: SecureGateway;
 }
 
-async function startServer(): Promise<Harness> {
+async function startServer(gitRunner?: GitRunner): Promise<Harness> {
   const pair = generateEd25519SeedKeyPair();
   const identity: BridgeIdentity = {
     version: 1,
@@ -109,12 +110,14 @@ async function startServer(): Promise<Harness> {
     createdAtMs: 1,
   };
   const hub = new FakeHub();
+  const inject = gitRunner === undefined ? {} : { gitRunner };
   const gateway = new SecureGateway({
     hub,
     identity,
     stateDir: mkdtempSync(join(tmpdir(), "lenscrew-e2ee-")),
     displayName: "E2EE Mac",
     pairingWindow: { isOpen: () => true, expiresAtMs: () => Date.now() + 300_000 },
+    ...inject,
   });
   // server 只调用 hub 的 onEvent/handle/replay/listSessions/latestQuota;
   // SessionHub 的 # 私有字段挡住了结构化 stub,这里显式越过 nominal 检查
@@ -124,6 +127,7 @@ async function startServer(): Promise<Harness> {
     host: "127.0.0.1",
     port: 0,
     gateway,
+    ...inject,
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const port = (server.address() as AddressInfo).port;
@@ -432,6 +436,101 @@ test("既有端点行为不变:/health 免鉴权,/events /command 仍要口令",
     );
     assert.equal(allowed.status, 200);
     assert.deepEqual(allowed.json, { ok: true });
+  } finally {
+    stopServer(h);
+  }
+});
+
+test("明文 /git:要口令,成功回 git 载荷,git 失败回 ok=false 而不是 HTTP 错误", async () => {
+  const seen: unknown[] = [];
+  const h = await startServer(async (request) => {
+    seen.push(request);
+    if (request.op === "push") throw new Error("remote: 权限不足");
+    return { kind: "done", detail: "已暂存" };
+  });
+  try {
+    const denied = await httpCall(
+      "POST",
+      `${h.base}/git`,
+      JSON.stringify({ op: "status", root: "/tmp/repo" }),
+    );
+    assert.equal(denied.status, 401);
+
+    const staged = await httpCall(
+      "POST",
+      `${h.base}/git`,
+      JSON.stringify({ op: "stage", root: "/tmp/repo", paths: [] }),
+      { authorization: `Bearer ${TOKEN}` },
+    );
+    assert.equal(staged.status, 200);
+    assert.deepEqual(staged.json, { ok: true, git: { kind: "done", detail: "已暂存" } });
+    assert.deepEqual(seen, [{ op: "stage", root: "/tmp/repo", paths: [] }]);
+
+    const failed = await httpCall(
+      "POST",
+      `${h.base}/git`,
+      JSON.stringify({ op: "push", root: "/tmp/repo" }),
+      { authorization: `Bearer ${TOKEN}` },
+    );
+    assert.equal(failed.status, 200);
+    assert.deepEqual(failed.json, { ok: false, error: "remote: 权限不足" });
+  } finally {
+    stopServer(h);
+  }
+});
+
+test("E2EE 通道 {t:\"git\"}:reply 附带 git 载荷,失败回 ok=false,结果只回发起方", async () => {
+  const h = await startServer(async (request) => {
+    if (request.op === "pull") throw new Error("Not possible to fast-forward");
+    return {
+      kind: "branches",
+      current: "main",
+      local: ["feature/git-panel", "main"],
+    };
+  });
+  const phone = createPhone("phone-git", "room-git-1");
+  try {
+    await httpCall("POST", `${h.base}/e2ee/send`, JSON.stringify(helloFrame(phone)));
+    const stream = await openStream(`${h.base}/e2ee/stream?device=${phone.phoneDeviceId}`);
+    await waitFor(() => stream.frames.length >= 1, "serverHello 下行");
+    const serverHello = stream.frames[0] as ServerHelloFrame;
+    await httpCall("POST", `${h.base}/e2ee/send`, JSON.stringify(phoneHandleServerHello(phone, serverHello)));
+    await waitFor(
+      () => stream.frames.some((f) => (f as { kind?: string }).kind === "secureReady"),
+      "secureReady 下行",
+    );
+
+    const ask = phoneSeal(
+      phone,
+      serverHello.keyEpoch,
+      JSON.stringify({ t: "git", id: 21, data: { op: "branches", root: "/tmp/repo" } }),
+    );
+    await httpCall("POST", `${h.base}/e2ee/send`, JSON.stringify(ask));
+    await waitFor(() => decryptedMessages(phone, stream).length >= 1, "git reply 下行");
+    assert.deepEqual(decryptedMessages(phone, stream)[0], {
+      t: "reply",
+      id: 21,
+      ok: true,
+      git: { kind: "branches", current: "main", local: ["feature/git-panel", "main"] },
+    });
+
+    const failing = phoneSeal(
+      phone,
+      serverHello.keyEpoch,
+      JSON.stringify({ t: "git", id: 22, data: { op: "pull", root: "/tmp/repo" } }),
+    );
+    await httpCall("POST", `${h.base}/e2ee/send`, JSON.stringify(failing));
+    await waitFor(() => decryptedMessages(phone, stream).length >= 2, "git 失败 reply 下行");
+    assert.deepEqual(decryptedMessages(phone, stream)[1], {
+      t: "reply",
+      id: 22,
+      ok: false,
+      error: "Not possible to fast-forward",
+    });
+
+    // git 是请求-应答,不该混进 hub 的指令流
+    assert.deepEqual(h.hub.handled, []);
+    stream.close();
   } finally {
     stopServer(h);
   }

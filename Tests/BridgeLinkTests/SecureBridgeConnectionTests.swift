@@ -425,6 +425,77 @@ struct SecureBridgeConnectionTests {
         }
     }
 
+    @Test("git 请求走 {t:\"git\"} 信封，reply 附带的结果载荷完整解出")
+    func gitRoundTripOverSecureChannel() async throws {
+        let server = E2EEStubServer()
+        defer { server.unregister() }
+        server.host.onPlaintext = { plaintext in
+            guard let object = try? JSONSerialization.jsonObject(with: Data(plaintext.utf8)),
+                let message = object as? [String: Any],
+                message["t"] as? String == "git",
+                let id = message["id"] as? Int
+            else { return [] }
+            let git = """
+                {"kind":"status","status":{"branch":"main","upstream":null,"ahead":null,\
+                "behind":null,"staged":[],"unstaged":[{"path":"README.md","code":"M",\
+                "oldPath":null}],"stashCount":0}}
+                """
+            return ["{\"t\":\"reply\",\"id\":\(id),\"ok\":true,\"git\":\(git)}"]
+        }
+
+        let connection = makeConnection(server, pairing: server.host.pairingPayload())
+        let states = StreamRecorder(connection.linkStates)
+        try await connection.connect()
+        try await states.waitUntil { $0.contains(.connected) }
+
+        let outcome = try await connection.git(.status(root: "/tmp/repo"))
+        #expect(
+            outcome
+                == .status(
+                    GitStatusSummary(
+                        branch: "main", upstream: nil, ahead: nil, behind: nil,
+                        staged: [],
+                        unstaged: [GitFileChange(path: "README.md", code: "M", oldPath: nil)],
+                        stashCount: 0
+                    )))
+
+        // 上行信封的线上格式：{t:"git", id, data:{op, root}}
+        let plaintext = try #require(server.host.receivedPlaintexts.last)
+        let message = try #require(
+            try JSONSerialization.jsonObject(with: Data(plaintext.utf8)) as? [String: Any])
+        #expect(message["t"] as? String == "git")
+        let data = try #require(message["data"] as? [String: Any])
+        #expect(data["op"] as? String == "status")
+        #expect(data["root"] as? String == "/tmp/repo")
+
+        await connection.disconnect()
+    }
+
+    @Test("git 失败的 reply 抛 transport 错误并透传 git 的 stderr")
+    func gitSurfacesFailureMessage() async throws {
+        let server = E2EEStubServer()
+        defer { server.unregister() }
+        server.host.onPlaintext = { plaintext in
+            guard let object = try? JSONSerialization.jsonObject(with: Data(plaintext.utf8)),
+                let message = object as? [String: Any],
+                let id = message["id"] as? Int
+            else { return [] }
+            return [
+                "{\"t\":\"reply\",\"id\":\(id),\"ok\":false,\"error\":\"Not possible to fast-forward\"}"
+            ]
+        }
+
+        let connection = makeConnection(server, pairing: server.host.pairingPayload())
+        let states = StreamRecorder(connection.linkStates)
+        try await connection.connect()
+        try await states.waitUntil { $0.contains(.connected) }
+
+        await #expect(throws: BridgeLinkError.transport("Not possible to fast-forward")) {
+            _ = try await connection.git(.pull(root: "/tmp/repo"))
+        }
+        await connection.disconnect()
+    }
+
     @Test("既无 pairing 也无 trustedMac 时 connect 直接报错")
     func connectRequiresTrustMaterial() async throws {
         let server = E2EEStubServer()

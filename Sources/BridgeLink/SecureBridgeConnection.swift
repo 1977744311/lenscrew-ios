@@ -183,17 +183,42 @@ public final class SecureBridgeConnection: BridgeConnecting, @unchecked Sendable
     }
 
     public func send(_ command: ClientCommand) async throws {
+        let reply = try await roundTrip { id in
+            ChannelCmdMessage(id: id, data: command)
+        }
+        guard reply.ok else {
+            throw BridgeLinkError.transport(reply.error ?? "bridge 拒绝了指令")
+        }
+    }
+
+    public func git(_ request: GitRequest) async throws -> GitOutcome {
+        let reply = try await roundTrip { id in
+            ChannelGitMessage(id: id, data: request)
+        }
+        guard reply.ok else {
+            throw BridgeLinkError.transport(reply.error ?? "bridge 拒绝了 git 请求")
+        }
+        guard let outcome = reply.git else {
+            throw BridgeLinkError.decoding("git 应答缺少结果载荷")
+        }
+        return outcome
+    }
+
+    /// cmd/git 共用的往返：封信封、登记等待、POST 上行、等下行流里的 reply
+    private func roundTrip(
+        _ makeMessage: (Int) -> some Encodable
+    ) async throws -> ChannelReply {
         let (id, envelope) = try lock.withLock { () -> (Int, EncryptedEnvelope) in
             guard let session, session.phase == .established else {
                 throw BridgeLinkError.notConnected
             }
             nextCommandId += 1
-            let plaintext = try encodeJSONLine(ChannelCmdMessage(id: nextCommandId, data: command))
+            let plaintext = try encodeJSONLine(makeMessage(nextCommandId))
             return (nextCommandId, try session.seal(plaintext))
         }
 
         // 先登记再 POST：mac 的 reply 走下行流，可能比 POST 响应先到
-        let reply: ChannelReply = try await withCheckedThrowingContinuation { continuation in
+        return try await withCheckedThrowingContinuation { continuation in
             lock.withLock { pendingReplies[id] = continuation }
             Task { [weak self] in
                 guard let self else { return }
@@ -203,9 +228,6 @@ public final class SecureBridgeConnection: BridgeConnecting, @unchecked Sendable
                     self.settlePendingReply(id: id, result: .failure(error))
                 }
             }
-        }
-        guard reply.ok else {
-            throw BridgeLinkError.transport(reply.error ?? "bridge 拒绝了指令")
         }
     }
 
@@ -372,6 +394,7 @@ public final class SecureBridgeConnection: BridgeConnecting, @unchecked Sendable
     private struct ChannelReply {
         let ok: Bool
         let error: String?
+        let git: GitOutcome?
     }
 
     private struct ChannelCmdMessage: Encodable {
@@ -385,6 +408,22 @@ public final class SecureBridgeConnection: BridgeConnecting, @unchecked Sendable
         func encode(to encoder: any Encoder) throws {
             var container = encoder.container(keyedBy: CodingKeys.self)
             try container.encode("cmd", forKey: .t)
+            try container.encode(id, forKey: .id)
+            try container.encode(data, forKey: .data)
+        }
+    }
+
+    private struct ChannelGitMessage: Encodable {
+        let id: Int
+        let data: GitRequest
+
+        private enum CodingKeys: String, CodingKey {
+            case t, id, data
+        }
+
+        func encode(to encoder: any Encoder) throws {
+            var container = encoder.container(keyedBy: CodingKeys.self)
+            try container.encode("git", forKey: .t)
             try container.encode(id, forKey: .id)
             try container.encode(data, forKey: .data)
         }
@@ -421,11 +460,22 @@ public final class SecureBridgeConnection: BridgeConnecting, @unchecked Sendable
         let t: String
     }
 
+    /// git 载荷解码失败不拖垮整条 reply（bridge 可能比 App 新增了 outcome 种类）；
+    /// 解不出时 reply.git 为 nil，git() 会以 decoding 错误落定而不是让调用方挂死
+    private struct LenientGitOutcome: Decodable {
+        let outcome: GitOutcome?
+
+        init(from decoder: any Decoder) {
+            outcome = try? GitOutcome(from: decoder)
+        }
+    }
+
     private struct ChannelReplyMessage: Decodable {
         let id: Int
         let ok: Bool
         let error: String?
         let events: [LenientBridgeEvent]?
+        let git: LenientGitOutcome?
     }
 
     private struct ChannelEventMessage: Decodable {
@@ -446,7 +496,9 @@ public final class SecureBridgeConnection: BridgeConnecting, @unchecked Sendable
                 if let event = lenient.event { eventContinuation.yield(event) }
             }
             settlePendingReply(
-                id: reply.id, result: .success(ChannelReply(ok: reply.ok, error: reply.error)))
+                id: reply.id,
+                result: .success(
+                    ChannelReply(ok: reply.ok, error: reply.error, git: reply.git?.outcome)))
         case "event":
             guard let message = try? decoder.decode(ChannelEventMessage.self, from: data),
                 let event = message.data.event

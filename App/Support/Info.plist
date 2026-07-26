@@ -38,6 +38,10 @@
 	<string>扫描 Mac 上的配对二维码需要相机。</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>连接同一网络下 Mac 上的 LensCrew bridge 需要访问本地网络。</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>语音输入追加指令需要麦克风。</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>把你说的话转成文字需要语音识别。</string>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

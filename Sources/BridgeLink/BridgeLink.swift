@@ -27,6 +27,10 @@ public protocol BridgeConnecting: Sendable {
     /// 会把客户端的断档检测搅乱。
     var linkStates: AsyncStream<BridgeLinkState> { get }
     func send(_ command: ClientCommand) async throws
+    /// git 面板的请求-应答通道：结果只回本次调用方，不进事件流。
+    /// git 失败（push 被拒、无法快进…）以 `BridgeLinkError.transport` 抛出，
+    /// message 就是 bridge 透传的 git stderr，可直接给用户看。
+    func git(_ request: GitRequest) async throws -> GitOutcome
     func connect() async throws
     func disconnect() async
 }
@@ -66,6 +70,8 @@ public final class MockBridgeConnection: BridgeConnecting, @unchecked Sendable {
     public let linkStates: AsyncStream<BridgeLinkState>
     private let lock = NSLock()
     private var sentCommands: [ClientCommand] = []
+    private var sentGitRequests: [GitRequest] = []
+    private var gitHandler: (@Sendable (GitRequest) async throws -> GitOutcome)?
 
     public init() {
         var capturedContinuation: AsyncStream<BridgeEvent>.Continuation!
@@ -87,8 +93,25 @@ public final class MockBridgeConnection: BridgeConnecting, @unchecked Sendable {
         lock.withLock { sentCommands.append(command) }
     }
 
+    public func git(_ request: GitRequest) async throws -> GitOutcome {
+        let handler = lock.withLock { () -> (@Sendable (GitRequest) async throws -> GitOutcome)? in
+            sentGitRequests.append(request)
+            return gitHandler
+        }
+        guard let handler else { throw BridgeLinkError.notConnected }
+        return try await handler(request)
+    }
+
     public var commands: [ClientCommand] {
         lock.withLock { sentCommands }
+    }
+
+    public var gitRequests: [GitRequest] {
+        lock.withLock { sentGitRequests }
+    }
+
+    public func stubGit(_ handler: @escaping @Sendable (GitRequest) async throws -> GitOutcome) {
+        lock.withLock { gitHandler = handler }
     }
 
     public func emit(_ event: BridgeEvent) {

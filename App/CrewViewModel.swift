@@ -428,6 +428,15 @@ final class CrewViewModel {
         }
     }
 
+    // MARK: - git 面板（按主机路由）
+
+    /// 请求-应答直达对应主机；错误抛给面板自行展示，不进全局错误条——
+    /// push 被拒这类失败是面板内的业务结果，不是连接故障
+    func git(_ request: GitRequest, on hostID: UUID) async throws -> GitOutcome {
+        guard let link = links[hostID] else { throw BridgeLinkError.notConnected }
+        return try await link.git(request)
+    }
+
     // MARK: - 眼镜
 
     func connectGlasses() async {

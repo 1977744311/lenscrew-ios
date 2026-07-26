@@ -2,6 +2,8 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { timingSafeEqual } from "node:crypto";
 
 import type { BridgeEvent, ClientCommand } from "../protocol/events.ts";
+import type { GitRequest } from "../protocol/git.ts";
+import { runGitRequest, type GitRunner } from "../git/service.ts";
 import type { SessionHub } from "../session/hub.ts";
 import type { HostFrame } from "../secure/channel.ts";
 import type { SecureGateway } from "../secure/secureGateway.ts";
@@ -26,6 +28,8 @@ export interface BridgeServerOptions {
     token: string;
     reopenPairing: () => { expiresAtMs: number; pairPayload: unknown };
   };
+  /** git 面板的执行器；缺省用真 git，测试注入 stub */
+  gitRunner?: GitRunner;
 }
 
 const SSE_HEADERS = {
@@ -50,6 +54,7 @@ const E2EE_QUEUE_LIMIT = 256;
 
 export function createBridgeServer(options: BridgeServerOptions): Server {
   const { hub, token, gateway, admin } = options;
+  const gitRunner = options.gitRunner ?? runGitRequest;
   const subscribers = new Set<ServerResponse>();
   const e2eeChannels = new Map<string, E2eeChannel>();
   /** encryptedEnvelope 只带 roomId,靠 clientHello 学到的映射把回帧路由回来源 device */
@@ -155,6 +160,20 @@ export function createBridgeServer(options: BridgeServerOptions): Server {
       }
       await hub.handle(command);
       sendJSON(response, 200, { ok: true });
+      return;
+    }
+
+    if (request.method === "POST" && url.pathname === "/git") {
+      const gitRequest = (await readJSON(request)) as GitRequest;
+      try {
+        sendJSON(response, 200, { ok: true, git: await gitRunner(gitRequest) });
+      } catch (error) {
+        // git 失败是业务结果不是传输故障：stderr 正是要给用户看的内容
+        sendJSON(response, 200, {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
       return;
     }
 

@@ -56,6 +56,8 @@ targets:
         NSBluetoothAlwaysUsageDescription: 连接 Meta Ray-Ban Display 眼镜需要蓝牙。
         NSCameraUsageDescription: 扫描 Mac 上的配对二维码需要相机。
         NSLocalNetworkUsageDescription: 连接同一网络下 Mac 上的 LensCrew bridge 需要访问本地网络。
+        NSMicrophoneUsageDescription: 语音输入追加指令需要麦克风。
+        NSSpeechRecognitionUsageDescription: 把你说的话转成文字需要语音识别。
         # bridge 跑在局域网里，用明文 HTTP；ATS 只对本地网络放行，公网仍然强制 TLS
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
