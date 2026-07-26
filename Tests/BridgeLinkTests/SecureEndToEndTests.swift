@@ -162,7 +162,7 @@ struct SecureEndToEndTests {
 
         try await connection.send(
             .createSession(
-                agent: .codex, workspaceRoot: "/tmp/lenscrew-e2e", model: nil, modeID: nil
+                agent: .codex, workspaceRoot: "/tmp", model: nil, modeID: nil
             )
         )
         #expect(

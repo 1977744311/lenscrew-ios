@@ -1,3 +1,5 @@
+import { stat } from "node:fs/promises";
+
 import type {
   AgentKind,
   AgentQuotaSnapshot,
@@ -284,6 +286,12 @@ export class SessionHub {
     this.#emit(record, { type: "sessionCreated", session: record.session });
 
     try {
+      // spawn 的 cwd 不存在时 Node 报 "spawn <命令> ENOENT"——错误指向命令、
+      // 真凶是目录，误导性极强，这里先把目录验掉，给出人话
+      const stats = await stat(workspaceRoot).catch(() => null);
+      if (stats === null || !stats.isDirectory()) {
+        throw new Error(`工作目录不存在：${workspaceRoot}`);
+      }
       await adapter.start({ workspaceRoot, model, modeId, resumeNativeId });
       // sessionCreated 必须早于 start()，否则启动期间的事件没有会话可归属；
       // 但真实能力要 start() 之后才确定，所以这里补一次快照修正它。

@@ -134,7 +134,7 @@ struct EndToEndTests {
 
         try await connection.send(
             .createSession(
-                agent: .codex, workspaceRoot: "/tmp/lenscrew-e2e",
+                agent: .codex, workspaceRoot: "/tmp",
                 model: nil, modeID: nil
             )
         )
@@ -215,7 +215,7 @@ struct EndToEndTests {
         try await connection.connect()
         try await connection.send(
             .createSession(
-                agent: .codex, workspaceRoot: "/tmp/lenscrew-e2e",
+                agent: .codex, workspaceRoot: "/tmp",
                 model: nil, modeID: nil
             )
         )
@@ -264,7 +264,7 @@ struct EndToEndTests {
         try await connection.connect()
         try await connection.send(
             .createSession(
-                agent: .codex, workspaceRoot: "/tmp/lenscrew-e2e",
+                agent: .codex, workspaceRoot: "/tmp",
                 model: nil, modeID: nil
             )
         )
@@ -290,7 +290,7 @@ struct EndToEndTests {
         try await connection.connect()
         try await connection.send(
             .createSession(
-                agent: .codex, workspaceRoot: "/tmp/lenscrew-e2e",
+                agent: .codex, workspaceRoot: "/tmp",
                 model: nil, modeID: nil
             )
         )

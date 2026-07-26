@@ -1,4 +1,5 @@
 import test from "node:test";
+import { tmpdir } from "node:os";
 import assert from "node:assert/strict";
 
 import { SessionHub, type SessionPersistence } from "../src/session/hub.ts";
@@ -93,11 +94,29 @@ async function openSession(hub: SessionHub): Promise<void> {
   await hub.handle({
     type: "createSession",
     agent: "codex",
-    workspaceRoot: "/Users/dev/project",
+    workspaceRoot: tmpdir(),
     model: null,
     modeId: null,
   });
 }
+
+test("工作目录不存在时给人话错误，不去拉起 adapter", async () => {
+  const { hub, events, adapters } = makeHub();
+  await hub.handle({
+    type: "createSession",
+    agent: "codex",
+    workspaceRoot: "/no/such/dir-lenscrew-test",
+    model: null,
+    modeId: null,
+  });
+
+  const failure = events.find((event) => event.type === "bridgeError");
+  assert.ok(failure?.type === "bridgeError");
+  assert.match(failure.message, /工作目录不存在/);
+  assert.equal(failure.fatal, true);
+  // spawn cwd 不存在会报误导性的 "spawn <命令> ENOENT"，必须拦在 start 之前
+  assert.ok(!adapters[0]!.calls.includes("start"));
+});
 
 /** 数组顶替文件的持久化，测试直接断言内容 */
 function memoryPersistence(initial: PersistedSession[] = []): {
@@ -128,7 +147,7 @@ test("会话路由表随 nativeId 落盘，关会话即从持久化删除", asyn
   await hub.handle({
     type: "createSession",
     agent: "codex",
-    workspaceRoot: "/Users/dev/project",
+    workspaceRoot: tmpdir(),
     model: null,
     modeId: "full",
   });
@@ -138,7 +157,7 @@ test("会话路由表随 nativeId 落盘，关会话即从持久化删除", asyn
   adapters[0]!.sink({ type: "nativeIdAssigned", nativeId: "thread-1" });
   assert.equal(saved().length, 1);
   assert.equal(saved()[0]!.nativeId, "thread-1");
-  assert.equal(saved()[0]!.workspaceRoot, "/Users/dev/project");
+  assert.equal(saved()[0]!.workspaceRoot, tmpdir());
   assert.equal(saved()[0]!.modeId, "full");
 
   await hub.handle({ type: "closeSession", sessionId: "s-1" });
@@ -150,7 +169,7 @@ test("restorePersisted 逐条续接，失败的条目清除且不留僵尸会话
     {
       agent: "codex",
       nativeId: "native-good",
-      workspaceRoot: "/Users/dev/project",
+      workspaceRoot: tmpdir(),
       model: null,
       modeId: "full",
       updatedAtMs: 1,
@@ -158,7 +177,7 @@ test("restorePersisted 逐条续接，失败的条目清除且不留僵尸会话
     {
       agent: "codex",
       nativeId: "native-broken",
-      workspaceRoot: "/Users/dev/other",
+      workspaceRoot: tmpdir(),
       model: null,
       modeId: null,
       updatedAtMs: 2,
@@ -277,7 +296,7 @@ test("start 之后补一次快照，把修正后的 capabilities 发出去", asy
 test("会话标题取工作目录名", async () => {
   const { hub } = makeHub();
   await openSession(hub);
-  assert.equal(hub.listSessions()[0]!.title, "project");
+  assert.equal(hub.listSessions()[0]!.title, tmpdir().split("/").pop());
 });
 
 test("重放只给 fromSeq 之后的事件", async () => {
