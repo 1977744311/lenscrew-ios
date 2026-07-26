@@ -148,15 +148,16 @@ struct SettingsScreen: View {
                 title: "端到端加密",
                 detail: pairedCount > 0
                     ? "已配对 \(pairedCount) 台 · X25519+AES-GCM"
-                    : "二维码配对 + E2EE 通道"
+                    : "扫码配对的电脑自动走 E2EE 通道"
             ) {
+                // 手动添加的主机走明文 HTTP + 口令，E2EE 只随扫码配对启用
                 if pairedCount == 0 {
-                    Text("开发中")
+                    Text("未配对")
                         .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(LC.lightBlue)
+                        .foregroundStyle(LC.text3)
                         .padding(.horizontal, 9)
                         .padding(.vertical, 3)
-                        .background(LC.blue.opacity(0.14), in: Capsule())
+                        .background(LC.elev2, in: Capsule())
                 }
             }
         } header: {

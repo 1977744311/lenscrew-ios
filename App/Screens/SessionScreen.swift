@@ -275,8 +275,11 @@ struct SessionScreen: View {
     }
 
     /// 思考：细行，可点展开全文。事件里没有耗时，不写「N 秒」。
+    /// 有的模型/配置不外发思考内容（codex 的 summary 可能为空）——
+    /// 没有内容就不给展开箭头，免得点开一片空白。
     private func reasoningRow(id: String, text: String, streaming: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        let expandable = !text.isEmpty
+        return VStack(alignment: .leading, spacing: 6) {
             Button {
                 if expandedReasoning.contains(id) {
                     expandedReasoning.remove(id)
@@ -285,14 +288,17 @@ struct SessionScreen: View {
                 }
             } label: {
                 thinRow {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 9, weight: .bold))
-                        .rotationEffect(.degrees(expandedReasoning.contains(id) ? 90 : 0))
+                    if expandable {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 9, weight: .bold))
+                            .rotationEffect(.degrees(expandedReasoning.contains(id) ? 90 : 0))
+                    }
                     Text(streaming ? "思考中…" : "思考")
                 }
             }
             .buttonStyle(.plain)
-            if expandedReasoning.contains(id) {
+            .disabled(!expandable)
+            if expandable, expandedReasoning.contains(id) {
                 Text(streaming ? text + "▍" : text)
                     .font(.system(size: 13))
                     .lineSpacing(4)

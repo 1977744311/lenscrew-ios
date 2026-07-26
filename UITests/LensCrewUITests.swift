@@ -116,8 +116,6 @@ final class LensCrewUITests: XCTestCase {
             element(app, "glasses.preview").waitForExistence(timeout: 10),
             "眼镜页没有画面预览区"
         )
-        // 600×600 是 DAT 硬约束，约束 chip 必须在场
-        XCTAssertTrue(app.staticTexts["600 × 600"].firstMatch.exists)
     }
 
     @MainActor

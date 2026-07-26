@@ -119,6 +119,7 @@ struct GlassesScreen: View {
     private var previewSection: some View {
         let output = preview
         return VStack(alignment: .leading, spacing: 8) {
+            // trailing 跟随眼镜端当前屏：预览是取景器，屏由眼镜上的操作驱动
             SectionHeader(title: "眼镜画面 · 实时", trailing: previewLabel(output))
             HStack {
                 Spacer()
@@ -129,8 +130,6 @@ struct GlassesScreen: View {
             }
             .padding(12)
             .background(LC.elev, in: RoundedRectangle(cornerRadius: 20))
-            screenKindChips(output)
-            constraintChips
         }
     }
 
@@ -146,42 +145,6 @@ struct GlassesScreen: View {
         case .transcript: return "流水"
         case .blockDetail: return "块详情"
         case .approval: return "审批卡"
-        }
-    }
-
-    /// 眼镜共四种屏。没有远程切屏 API，这排 chip 只做当前屏高亮展示。
-    private func screenKindChips(_ output: GlassPreview.Output) -> some View {
-        HStack(spacing: 6) {
-            Spacer()
-            ForEach(
-                [GlassPreview.Kind.sessionList, .transcript, .blockDetail, .approval],
-                id: \.self
-            ) { kind in
-                let current = kind == output.kind
-                let label = current && kind == .transcript
-                    ? "流水 \(output.pageIndex + 1)/\(max(output.pageCount, 1))"
-                    : kindLabel(kind)
-                Text(label)
-                    .font(.system(size: 11.5, weight: current ? .semibold : .medium))
-                    .foregroundStyle(current ? LC.glassGreen : LC.text2)
-                    .padding(.horizontal, 9)
-                    .padding(.vertical, 3)
-                    .background(
-                        current ? LC.green.opacity(0.14) : LC.elev2, in: Capsule()
-                    )
-            }
-            Spacer()
-        }
-    }
-
-    /// DAT 0.8.0 的硬约束，不是设计偏好
-    private var constraintChips: some View {
-        HStack(spacing: 6) {
-            Spacer()
-            ForEach(["600 × 600", "整屏替换", "3 字号 · 2 色", "仅点按"], id: \.self) { text in
-                LCChip(fontSize: 11) { Text(text) }
-            }
-            Spacer()
         }
     }
 
