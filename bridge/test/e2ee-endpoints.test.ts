@@ -88,6 +88,7 @@ function sampleSession(id: string): AgentSession {
     },
     modeId: "default",
     modes: [{ id: "default", label: "默认", detail: "每步审批" }],
+    models: [],
     createdAtMs: 1,
     updatedAtMs: 1,
   };

@@ -100,11 +100,7 @@ struct SessionScreen: View {
                     .lineLimit(1)
                 HStack(spacing: 6) {
                     AgentBadge(agent: state.session.agent)
-                    if let modelName = state.session.model {
-                        Text(modelName)
-                            .font(.system(size: 12))
-                            .foregroundStyle(LC.text3)
-                    }
+                    modelLabel(state)
                     StatusPill(style: .session(state.session.status))
                 }
             }
@@ -134,6 +130,49 @@ struct SessionScreen: View {
         .buttonStyle(.plain)
         .accessibilityLabel("git 面板")
         .accessibilityIdentifier("session.gitPanel")
+    }
+
+    /// 模型名：单行截断（cursor 的模型 id 自带参数很长，不截会把导航头挤成三行）；
+    /// 会话自陈了模型清单时可点切换——codex 下一轮生效，claude/cursor 即时生效
+    @ViewBuilder
+    private func modelLabel(_ state: SessionState) -> some View {
+        if let modelID = state.session.model {
+            let display = state.session.models.first { $0.id == modelID }?.label ?? modelID
+            if state.session.models.count > 1 {
+                Menu {
+                    Section("会话模型") {
+                        ForEach(state.session.models) { option in
+                            Button {
+                                Task { await model.setSessionModel(sessionKey, modelID: option.id) }
+                            } label: {
+                                if option.id == modelID {
+                                    Label(option.label, systemImage: "checkmark")
+                                } else {
+                                    Text(option.label)
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 3) {
+                        Text(display)
+                            .font(.system(size: 12))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 7, weight: .bold))
+                    }
+                    .foregroundStyle(LC.text3)
+                }
+                .accessibilityIdentifier("session.modelChip")
+            } else {
+                Text(display)
+                    .font(.system(size: 12))
+                    .foregroundStyle(LC.text3)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
     }
 
     /// 眼镜挂载状态入口：绿=已挂载

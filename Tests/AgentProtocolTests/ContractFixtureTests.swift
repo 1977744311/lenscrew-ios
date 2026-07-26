@@ -147,7 +147,17 @@ struct ContractFixtureTests {
         #expect(setObject["sessionId"] as? String == "s-001")
         #expect(setObject["modeId"] as? String == "full")
 
-        for command in [create, setMode] {
+        let setModel = ClientCommand.setSessionModel(
+            sessionID: "s-001", modelID: "gpt-5.6-terra"
+        )
+        let modelObject = try #require(
+            JSONSerialization.jsonObject(with: try encoder.encode(setModel)) as? [String: Any]
+        )
+        #expect(modelObject["type"] as? String == "setSessionModel")
+        #expect(modelObject["sessionId"] as? String == "s-001")
+        #expect(modelObject["modelId"] as? String == "gpt-5.6-terra")
+
+        for command in [create, setMode, setModel] {
             let decoded = try JSONDecoder().decode(
                 ClientCommand.self, from: try encoder.encode(command)
             )

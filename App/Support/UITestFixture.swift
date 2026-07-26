@@ -118,6 +118,10 @@ final class FixtureBridgeConnection: BridgeConnecting, @unchecked Sendable {
                 SessionModeOption(id: "default", label: "默认 · 每步审批", detail: "每条命令先问"),
                 SessionModeOption(id: "auto", label: "自动 · 按需审批", detail: "越界才问"),
             ],
+            models: [
+                SessionModelOption(id: "scripted", label: "Scripted"),
+                SessionModelOption(id: "scripted-mini", label: "Scripted Mini"),
+            ],
             createdAtMs: Self.baseMs, updatedAtMs: sessionUpdatedAtMs
         )
         let approval = ApprovalRequest(

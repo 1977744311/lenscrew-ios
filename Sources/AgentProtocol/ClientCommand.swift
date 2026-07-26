@@ -14,13 +14,15 @@ public enum ClientCommand: Sendable, Equatable {
     case resolveApproval(sessionID: String, approvalID: String, optionID: String)
     /// 会话中切换模式；codex 下一轮 turn 生效，claude/cursor 即时生效
     case setSessionMode(sessionID: String, modeID: String)
+    /// 会话中切换模型；codex 下一轮 turn 生效，claude/cursor 即时生效
+    case setSessionModel(sessionID: String, modelID: String)
     case closeSession(sessionID: String)
     case subscribe(sessionID: String, fromSeq: Int)
 }
 
 extension ClientCommand: Codable {
     private enum CodingKeys: String, CodingKey {
-        case type, agent, workspaceRoot, model, modeId, nativeId
+        case type, agent, workspaceRoot, model, modeId, modelId, nativeId
         case sessionId, text, approvalId, optionId, fromSeq
     }
 
@@ -62,6 +64,11 @@ extension ClientCommand: Codable {
             self = .setSessionMode(
                 sessionID: try container.decode(String.self, forKey: .sessionId),
                 modeID: try container.decode(String.self, forKey: .modeId)
+            )
+        case "setSessionModel":
+            self = .setSessionModel(
+                sessionID: try container.decode(String.self, forKey: .sessionId),
+                modelID: try container.decode(String.self, forKey: .modelId)
             )
         case "closeSession":
             self = .closeSession(
@@ -112,6 +119,10 @@ extension ClientCommand: Codable {
             try container.encode("setSessionMode", forKey: .type)
             try container.encode(sessionID, forKey: .sessionId)
             try container.encode(modeID, forKey: .modeId)
+        case let .setSessionModel(sessionID, modelID):
+            try container.encode("setSessionModel", forKey: .type)
+            try container.encode(sessionID, forKey: .sessionId)
+            try container.encode(modelID, forKey: .modelId)
         case let .closeSession(sessionID):
             try container.encode("closeSession", forKey: .type)
             try container.encode(sessionID, forKey: .sessionId)

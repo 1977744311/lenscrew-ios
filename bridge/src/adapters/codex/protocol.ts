@@ -497,15 +497,16 @@ export type CodexTurnSandboxPolicy =
   | { type: "dangerFullAccess" };
 
 /**
- * approvalPolicy/sandboxPolicy 的 schema 注释是
- * "Override the approval policy for this turn and subsequent turns"——
- * 这就是官方的会话中切换通道：每轮 turn 下发当前档位即可。
+ * approvalPolicy/sandboxPolicy/model 的 schema 注释都是
+ * "Override ... for this turn and subsequent turns"——
+ * 这就是官方的会话中切换通道：每轮 turn 下发当前值即可。
  */
 export interface CodexTurnStartParams {
   threadId: string;
   input: CodexUserInput[];
   approvalPolicy?: CodexAskForApproval;
   sandboxPolicy?: CodexTurnSandboxPolicy;
+  model?: string;
 }
 
 /** expectedTurnId 对不上会被拒，所以 adapter 必须自己盯住当前 turnId */

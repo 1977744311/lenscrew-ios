@@ -69,6 +69,10 @@ class FakeAdapter implements AgentAdapter {
     this.currentModeId = modeId;
     this.sink({ type: "modeResolved", modeId });
   }
+  async setModel(modelId: string): Promise<void> {
+    this.calls.push(`setModel:${modelId}`);
+    this.sink({ type: "modelResolved", model: modelId });
+  }
   async close(): Promise<void> {
     this.calls.push("close");
   }
@@ -221,6 +225,30 @@ test("setSessionMode 派发到 adapter，回显后快照携带新模式", async 
   const updated = events.filter((event) => event.type === "sessionUpdated").at(-1);
   assert.ok(updated?.type === "sessionUpdated");
   assert.equal(updated.session.modeId, "full");
+});
+
+test("setSessionModel 派发到 adapter，回显与清单都进快照", async () => {
+  const { hub, events, adapters } = makeHub();
+  await openSession(hub);
+
+  // 运行时自陈的模型清单进会话快照
+  adapters[0]!.sink({
+    type: "modelsResolved",
+    models: [
+      { id: "m-fast", label: "Fast" },
+      { id: "m-max", label: "Max" },
+    ],
+  });
+  await hub.handle({ type: "setSessionModel", sessionId: "s-1", modelId: "m-max" });
+  assert.ok(adapters[0]!.calls.includes("setModel:m-max"));
+
+  const updated = events.filter((event) => event.type === "sessionUpdated").at(-1);
+  assert.ok(updated?.type === "sessionUpdated");
+  assert.equal(updated.session.model, "m-max");
+  assert.deepEqual(
+    updated.session.models.map((option) => option.id),
+    ["m-fast", "m-max"],
+  );
 });
 
 test("seq 在会话内连续递增，不留空洞", async () => {

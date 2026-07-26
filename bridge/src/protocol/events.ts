@@ -52,6 +52,17 @@ export interface SessionModeOption {
   detail: string;
 }
 
+/**
+ * 会话可用的一个模型。id 是运行时自己的模型标识（codex "gpt-5.6-terra"、
+ * claude "sonnet"、cursor "gpt-5.4-mini[reasoning=medium]"），label 是人读名。
+ * 清单由运行时自陈（claude init、cursor session/new、codex model/list），
+ * bridge 不维护静态模型表——上游上新时这里自动跟上。
+ */
+export interface SessionModelOption {
+  id: string;
+  label: string;
+}
+
 export interface AgentSession {
   /** bridge 分配，跨重连稳定 */
   id: string;
@@ -71,6 +82,8 @@ export interface AgentSession {
   modeId: string | null;
   /** 本会话可切换的模式清单；空数组表示不支持切换 */
   modes: SessionModeOption[];
+  /** 本会话可切换的模型清单（运行时自陈）；空数组表示不支持切换 */
+  models: SessionModelOption[];
   createdAtMs: number;
   updatedAtMs: number;
 }
@@ -346,5 +359,7 @@ export type ClientCommand =
     }
   /** 会话中切换模式；codex 下一轮 turn 生效，claude/cursor 即时生效 */
   | { type: "setSessionMode"; sessionId: string; modeId: string }
+  /** 会话中切换模型；codex 下一轮 turn 生效，claude/cursor 即时生效 */
+  | { type: "setSessionModel"; sessionId: string; modelId: string }
   | { type: "closeSession"; sessionId: string }
   | { type: "subscribe"; sessionId: string; fromSeq: number };

@@ -39,6 +39,7 @@ function snapshot(session: AgentSession): AgentSession {
     ...session,
     capabilities: { ...session.capabilities },
     modes: session.modes.map((mode) => ({ ...mode })),
+    models: session.models.map((model) => ({ ...model })),
   };
 }
 
@@ -209,6 +210,13 @@ export class SessionHub {
         return;
       }
 
+      case "setSessionModel": {
+        const record = this.#require(command.sessionId);
+        // 生效后经 modelResolved 回显，快照统一刷新
+        await record.adapter.setModel(command.modelId);
+        return;
+      }
+
       case "closeSession": {
         const record = this.#require(command.sessionId);
         await record.adapter.close();
@@ -278,6 +286,8 @@ export class SessionHub {
         capabilities: adapter.capabilities,
         modeId: modeId ?? adapter.defaultModeId,
         modes: adapter.modes,
+        // 模型清单全靠运行时自陈（modelsResolved），没有静态表可给
+        models: [],
         createdAtMs: now,
         updatedAtMs: now,
       },
@@ -356,13 +366,15 @@ export class SessionHub {
       event.type === "titleResolved" ||
       event.type === "capabilitiesResolved" ||
       event.type === "modeResolved" ||
-      event.type === "modesResolved"
+      event.type === "modesResolved" ||
+      event.type === "modelsResolved"
     ) {
       if (event.type === "nativeIdAssigned") record.session.nativeId = event.nativeId;
       if (event.type === "modelResolved") record.session.model = event.model;
       if (event.type === "titleResolved") record.session.title = event.title;
       if (event.type === "modeResolved") record.session.modeId = event.modeId;
       if (event.type === "modesResolved") record.session.modes = event.modes;
+      if (event.type === "modelsResolved") record.session.models = event.models;
       record.session.capabilities = record.adapter.capabilities;
       // 路由表随元数据走：nativeId 到手、模式切换都要反映到下次重启的恢复里
       this.#persist();

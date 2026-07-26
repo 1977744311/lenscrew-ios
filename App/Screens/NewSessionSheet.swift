@@ -14,10 +14,22 @@ struct NewSessionSheet: View {
     @State private var editingCustomRoot = false
     /// nil = 跟随所选 agent 的默认档
     @State private var modeID: String?
+    /// nil = 跟随 CLI 默认模型
+    @State private var modelID: String?
     @FocusState private var customRootFocused: Bool
 
     private var effectiveModeID: String {
         modeID ?? AgentModes.defaultModeID(for: agent)
+    }
+
+    /// 可选模型来自该主机同 agent 最近会话的运行时自陈；
+    /// 还没开过会话就没有清单，此时只能跟随 CLI 默认（会话内仍可切换）
+    private var availableModels: [SessionModelOption] {
+        let sessions = targetHostID.flatMap { model.link(for: $0)?.sessions } ?? []
+        return sessions
+            .filter { $0.session.agent == agent && !$0.session.models.isEmpty }
+            .max { $0.session.updatedAtMs < $1.session.updatedAtMs }?
+            .session.models ?? []
     }
 
     /// 生效的工作目录：行内输入优先于 MRU 选择
@@ -58,6 +70,7 @@ struct NewSessionSheet: View {
                     agentSection
                     rootSection
                     modeSection
+                    modelSection
                 }
             }
             .scrollDismissesKeyboard(.interactively)
@@ -66,9 +79,11 @@ struct NewSessionSheet: View {
                 guard let target = targetHostID else { return }
                 let root = effectiveRoot
                 let chosenMode = effectiveModeID
+                let chosenModel = modelID
                 Task {
                     await model.createSession(
-                        agent: agent, workspaceRoot: root, modeID: chosenMode, on: target
+                        agent: agent, workspaceRoot: root, modeID: chosenMode,
+                        modelID: chosenModel, on: target
                     )
                 }
                 dismiss()
@@ -88,11 +103,12 @@ struct NewSessionSheet: View {
                 selectedRoot = model.hosts.workspaceRoots.first
             }
         }
-        // 换 agent 后档位集合不同（codex 的 auto 在 claude 没有），回到新 agent 的默认档
+        // 换 agent 后档位与模型集合都不同，回到新 agent 的默认
         .onChange(of: agent) { _, fresh in
             if let modeID, !AgentModes.options(for: fresh).contains(where: { $0.id == modeID }) {
                 self.modeID = nil
             }
+            modelID = nil
         }
     }
 
@@ -309,6 +325,63 @@ struct NewSessionSheet: View {
                 }
             }
             .background(LC.elev, in: RoundedRectangle(cornerRadius: 20))
+        }
+    }
+
+    // MARK: - 模型
+
+    /// 清单来自该主机同 agent 会话的运行时自陈；没开过会话就没有清单，
+    /// 不显示本区（跟随 CLI 默认，会话内仍可切换）
+    @ViewBuilder
+    private var modelSection: some View {
+        let options = availableModels
+        if !options.isEmpty {
+            VStack(alignment: .leading, spacing: 8) {
+                SectionHeader(title: "模型")
+                Menu {
+                    Button {
+                        modelID = nil
+                    } label: {
+                        if modelID == nil {
+                            Label("CLI 默认", systemImage: "checkmark")
+                        } else {
+                            Text("CLI 默认")
+                        }
+                    }
+                    Section {
+                        ForEach(options) { option in
+                            Button {
+                                modelID = option.id
+                            } label: {
+                                if modelID == option.id {
+                                    Label(option.label, systemImage: "checkmark")
+                                } else {
+                                    Text(option.label)
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Text(
+                            modelID.flatMap { id in options.first { $0.id == id }?.label }
+                                ?? "CLI 默认"
+                        )
+                        .font(.system(size: 14))
+                        .foregroundStyle(LC.text)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        Spacer()
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(LC.text3)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 13)
+                    .background(LC.elev, in: RoundedRectangle(cornerRadius: 20))
+                }
+                .accessibilityIdentifier("newSession.model")
+            }
         }
     }
 

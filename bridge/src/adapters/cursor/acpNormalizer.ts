@@ -434,6 +434,17 @@ export class CursorAcpNormalizer implements ProtocolNormalizer<AcpWireMessage> {
         });
         events.push({ type: "modeResolved", modeId: modes.currentModeId });
       }
+      // 模型清单同样自陈，手机端的模型切换菜单靠它
+      const availableModels = result?.models?.availableModels;
+      if (availableModels !== undefined && availableModels.length > 0) {
+        events.push({
+          type: "modelsResolved",
+          models: availableModels.map((entry) => ({
+            id: entry.modelId,
+            label: entry.name ?? entry.modelId,
+          })),
+        });
+      }
       events.push({ type: "status", status: "idle" });
       return events;
     }

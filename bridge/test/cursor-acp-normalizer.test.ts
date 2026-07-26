@@ -60,6 +60,8 @@ test("acp 整轮往返归一成契约事件序列", () => {
     // session/new 自陈可用模式与当前模式，两条都要出——UI 的模式切换菜单靠它
     "modesResolved",
     "modeResolved",
+    // 可用模型清单同样自陈，模型切换菜单靠它
+    "modelsResolved",
     "status:idle",
     // 用户消息是从我们发出的 session/prompt 造的：cursor 不回显
     "blockAppended:userMessage",

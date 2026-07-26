@@ -91,6 +91,7 @@ function rebuildSession(value: AgentSession): AgentSession {
       label: mode.label,
       detail: mode.detail,
     })),
+    models: value.models.map((model) => ({ id: model.id, label: model.label })),
     createdAtMs: value.createdAtMs,
     updatedAtMs: value.updatedAtMs,
   };

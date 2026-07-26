@@ -91,6 +91,8 @@ export class CursorAdapter implements AgentAdapter {
   #capabilities: AgentCapabilities;
   #modes: SessionModeOption[] = CURSOR_MODES;
   #modeId: string = CURSOR_DEFAULT_MODE;
+  /** setModel 之后的覆盖值；print 路径下一轮 argv 用它 */
+  #modelOverride: string | null = null;
   #startOptions: AdapterStartOptions | null = null;
   #child: ChildProcess | null = null;
   #stdoutBuffer = "";
@@ -208,6 +210,25 @@ export class CursorAdapter implements AgentAdapter {
     // 无效 modeId 的错误信息自带合法取值清单，原样透传即可
     await this.#request("session/set_mode", { sessionId, modeId: valid });
     this.#modeId = valid;
+  }
+
+  async setModel(modelId: string): Promise<void> {
+    if (this.#drive === "print") {
+      // -p 一轮一进程：记住模型，下一轮 argv 的 --model 生效
+      this.#modelOverride = modelId;
+      this.#emit({ type: "modelResolved", model: modelId });
+      return;
+    }
+    const sessionId = this.#requireSessionId();
+    // [实测] cursor 要的键是 configId（ACP schema 写 optionId），成功回更新后的
+    // configOptions；没有独立的模型回显通知，这里自己发
+    await this.#request("session/set_config_option", {
+      sessionId,
+      configId: "model",
+      value: modelId,
+    });
+    this.#modelOverride = modelId;
+    this.#emit({ type: "modelResolved", model: modelId });
   }
 
   #validateMode(modeId: string): string {
@@ -357,7 +378,8 @@ export class CursorAdapter implements AgentAdapter {
 
   #startPrintTurn(options: AdapterStartOptions, text: string): void {
     const args = ["-p", "--output-format", "stream-json"];
-    if (options.model !== null) args.push("--model", options.model);
+    const model = this.#modelOverride ?? options.model;
+    if (model !== null) args.push("--model", model);
     // -p 的 --mode 只认 plan/ask，agent 档就是不带 flag 的缺省行为
     if (this.#modeId === "plan" || this.#modeId === "ask") {
       args.push("--mode", this.#modeId);

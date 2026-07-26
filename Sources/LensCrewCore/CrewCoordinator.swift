@@ -76,6 +76,11 @@ public actor CrewCoordinator {
         try await bridge.send(.setSessionMode(sessionID: sessionID, modeID: modeID))
     }
 
+    /// 切换会话模型；生效以 bridge 回推的 sessionUpdated（model 变化）为准
+    public func setSessionModel(_ sessionID: String, modelID: String) async throws {
+        try await bridge.send(.setSessionModel(sessionID: sessionID, modelID: modelID))
+    }
+
     public func interrupt(_ sessionID: String) async throws {
         try await bridge.send(.interrupt(sessionID: sessionID))
     }

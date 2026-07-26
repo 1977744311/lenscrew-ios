@@ -4,6 +4,7 @@ import type {
   AgentQuotaSnapshot,
   ApprovalOutcome,
   ApprovalRequest,
+  SessionModelOption,
   SessionModeOption,
   SessionStatus,
   TranscriptBlock,
@@ -48,6 +49,8 @@ export type AdapterEvent =
   | { type: "modeResolved"; modeId: string }
   /** 运行时自陈的可用模式清单（cursor 的 session/new 响应），覆盖 adapter 的静态表 */
   | { type: "modesResolved"; modes: SessionModeOption[] }
+  /** 运行时自陈的可用模型清单（claude init / cursor session/new / codex model/list） */
+  | { type: "modelsResolved"; models: SessionModelOption[] }
   | { type: "error"; message: string; fatal: boolean };
 
 /**
@@ -111,6 +114,8 @@ export interface AgentAdapter {
    * 未知 modeId 抛错并把合法取值写进错误信息。
    */
   setMode(modeId: string): Promise<void>;
+  /** 会话中切换模型。生效后 adapter 发 `modelResolved` 回显 */
+  setModel(modelId: string): Promise<void>;
   close(): Promise<void>;
 }
 

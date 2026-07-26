@@ -105,6 +105,8 @@ export class CodexAdapter implements AgentAdapter {
   #nextRequestId = 1;
   #threadId: string | null = null;
   #modeId: string = CODEX_DEFAULT_MODE;
+  /** null 表示跟随 CLI 默认；setModel 之后每轮 turn 随 override 下发 */
+  #model: string | null = null;
   #closing = false;
 
   constructor(options: CodexAdapterOptions) {
@@ -154,7 +156,26 @@ export class CodexAdapter implements AgentAdapter {
       })
       .catch(() => {});
 
+    // 可用模型清单同样 fire-and-forget：手机端的模型切换菜单靠它，
+    // 拿不到（旧版无此方法）只是菜单不出现，不影响会话
+    void this.#request("model/list", {})
+      .then((result) => {
+        const data = (result as { data?: unknown[] })?.data ?? [];
+        const models = data.flatMap((entry) => {
+          const record = entry as {
+            id?: string;
+            displayName?: string;
+            hidden?: boolean;
+          };
+          if (typeof record.id !== "string" || record.hidden === true) return [];
+          return [{ id: record.id, label: record.displayName ?? record.id }];
+        });
+        if (models.length > 0) this.#sink({ type: "modelsResolved", models });
+      })
+      .catch(() => {});
+
     this.#modeId = this.#validateMode(options.modeId ?? CODEX_DEFAULT_MODE);
+    this.#model = options.model;
     const { approvalPolicy, sandbox } = this.#policyFor(this.#modeId);
     if (options.resumeNativeId !== null) {
       const params: CodexThreadResumeParams = {
@@ -226,8 +247,8 @@ export class CodexAdapter implements AgentAdapter {
       return;
     }
 
-    // 每轮都带当前档位（幂等）：这是 codex 官方的模式切换通道——
-    // turn 级 policy 的语义是 "override for this turn and subsequent turns"
+    // 每轮都带当前档位与模型（幂等）：这是 codex 官方的切换通道——
+    // turn 级字段的语义是 "override for this turn and subsequent turns"
     const { approvalPolicy, sandbox } = this.#policyFor(this.#modeId);
     const params: CodexTurnStartParams = {
       threadId,
@@ -235,6 +256,7 @@ export class CodexAdapter implements AgentAdapter {
       approvalPolicy,
       sandboxPolicy: turnSandboxPolicy(sandbox),
     };
+    if (this.#model !== null) params.model = this.#model;
     await this.#request("turn/start", params);
   }
 
@@ -245,6 +267,12 @@ export class CodexAdapter implements AgentAdapter {
   async setMode(modeId: string): Promise<void> {
     this.#modeId = this.#validateMode(modeId);
     this.#sink({ type: "modeResolved", modeId: this.#modeId });
+  }
+
+  /** 模型同理：记账 + 回显，下一轮 turn/start 随 model override 生效 */
+  async setModel(modelId: string): Promise<void> {
+    this.#model = modelId;
+    this.#sink({ type: "modelResolved", model: modelId });
   }
 
   async interrupt(): Promise<void> {

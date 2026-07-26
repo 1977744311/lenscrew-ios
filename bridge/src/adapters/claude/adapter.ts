@@ -12,6 +12,7 @@ import type {
   ClaudeCanUseToolRequest,
   ClaudeControlRequest,
   ClaudeControlResponse,
+  ClaudeInitializeModels,
   ClaudeMessage,
   ClaudePermissionDecision,
   ClaudeStdinMessage,
@@ -184,12 +185,19 @@ export class ClaudeAdapter implements AgentAdapter {
 
     // 必须在第一条用户消息之前完成：不注册 PreToolUse hook 的话，
     // stdin 会在审批作答之前被收掉，can_use_tool 就永远等不到回复。
-    await this.sendControlRequest({
+    const initResult = (await this.sendControlRequest({
       subtype: "initialize",
       hooks: {
         PreToolUse: [{ matcher: null, hookCallbackIds: [PRE_TOOL_USE_CALLBACK_ID] }],
       },
+    })) as ClaudeInitializeModels | undefined;
+
+    // initialize 应答自陈可用模型，手机端的模型切换菜单靠它
+    const models = (initResult?.models ?? []).flatMap((entry) => {
+      if (typeof entry.value !== "string" || entry.value === "") return [];
+      return [{ id: entry.value, label: entry.displayName ?? entry.value }];
     });
+    if (models.length > 0) this.emit({ type: "modelsResolved", models });
   }
 
   private buildArgs(options: AdapterStartOptions): string[] {
@@ -228,6 +236,12 @@ export class ClaudeAdapter implements AgentAdapter {
       mode: claudeNativeMode(valid),
     });
     this.modeId = valid;
+  }
+
+  /** [实测] set_model 成功只回 success、没有回显消息，所以这里自己发 modelResolved */
+  async setModel(modelId: string): Promise<void> {
+    await this.sendControlRequest({ subtype: "set_model", model: modelId });
+    this.emit({ type: "modelResolved", model: modelId });
   }
 
   private validateMode(modeId: string): string {

@@ -406,11 +406,12 @@ final class CrewViewModel {
     // MARK: - 会话（按主机路由）
 
     func createSession(
-        agent: AgentKind, workspaceRoot: String, modeID: String?, on hostID: UUID
+        agent: AgentKind, workspaceRoot: String, modeID: String?, modelID: String?,
+        on hostID: UUID
     ) async {
         let sent = await run(on: hostID) {
             try await $0.createSession(
-                agent: agent, workspaceRoot: workspaceRoot, modeID: modeID
+                agent: agent, workspaceRoot: workspaceRoot, model: modelID, modeID: modeID
             )
         }
         if sent {
@@ -422,6 +423,13 @@ final class CrewViewModel {
     func setSessionMode(_ key: SessionKey, modeID: String) async {
         await run(on: key.hostID) {
             try await $0.setSessionMode(key.sessionID, modeID: modeID)
+        }
+    }
+
+    /// 会话中切换模型；生效以 bridge 回推的 sessionUpdated 为准
+    func setSessionModel(_ key: SessionKey, modelID: String) async {
+        await run(on: key.hostID) {
+            try await $0.setSessionModel(key.sessionID, modelID: modelID)
         }
     }
 

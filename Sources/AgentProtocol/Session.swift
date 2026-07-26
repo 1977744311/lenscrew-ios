@@ -51,6 +51,18 @@ public struct SessionModeOption: Sendable, Equatable, Codable, Identifiable {
     }
 }
 
+/// 会话可用的一个模型。id 是运行时自己的模型标识，label 是人读名；
+/// 清单由运行时自陈，客户端只展示、不维护静态模型表。
+public struct SessionModelOption: Sendable, Equatable, Codable, Identifiable {
+    public var id: String
+    public var label: String
+
+    public init(id: String, label: String) {
+        self.id = id
+        self.label = label
+    }
+}
+
 public struct AgentSession: Sendable, Equatable, Codable, Identifiable {
     public var id: String
     public var agent: AgentKind
@@ -65,6 +77,8 @@ public struct AgentSession: Sendable, Equatable, Codable, Identifiable {
     public var modeId: String?
     /// 本会话可切换的模式清单；空数组表示不支持切换
     public var modes: [SessionModeOption]
+    /// 本会话可切换的模型清单（运行时自陈）；空数组表示不支持切换
+    public var models: [SessionModelOption]
     public var createdAtMs: Int64
     public var updatedAtMs: Int64
 
@@ -72,7 +86,7 @@ public struct AgentSession: Sendable, Equatable, Codable, Identifiable {
         id: String, agent: AgentKind, nativeId: String?, workspaceRoot: String,
         title: String, model: String?, status: SessionStatus,
         capabilities: AgentCapabilities, modeId: String?, modes: [SessionModeOption],
-        createdAtMs: Int64, updatedAtMs: Int64
+        models: [SessionModelOption], createdAtMs: Int64, updatedAtMs: Int64
     ) {
         self.id = id
         self.agent = agent
@@ -84,6 +98,7 @@ public struct AgentSession: Sendable, Equatable, Codable, Identifiable {
         self.capabilities = capabilities
         self.modeId = modeId
         self.modes = modes
+        self.models = models
         self.createdAtMs = createdAtMs
         self.updatedAtMs = updatedAtMs
     }
@@ -102,6 +117,7 @@ public struct AgentSession: Sendable, Equatable, Codable, Identifiable {
         try container.encode(capabilities, forKey: .capabilities)
         try container.encode(modeId, forKey: .modeId)
         try container.encode(modes, forKey: .modes)
+        try container.encode(models, forKey: .models)
         try container.encode(createdAtMs, forKey: .createdAtMs)
         try container.encode(updatedAtMs, forKey: .updatedAtMs)
     }

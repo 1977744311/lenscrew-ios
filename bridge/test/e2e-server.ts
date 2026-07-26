@@ -54,6 +54,10 @@ class ScriptedAdapter implements AgentAdapter {
     this.#sink({ type: "modeResolved", modeId });
   }
 
+  async setModel(modelId: string): Promise<void> {
+    this.#sink({ type: "modelResolved", model: modelId });
+  }
+
   async start(): Promise<void> {
     this.#sink({ type: "nativeIdAssigned", nativeId: "thread-e2e" });
     this.#sink({ type: "modelResolved", model: "scripted" });

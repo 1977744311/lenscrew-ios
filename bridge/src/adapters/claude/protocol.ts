@@ -80,6 +80,15 @@ export interface ClaudeSystemInit {
   capabilities?: string[];
 }
 
+/**
+ * [实测 2026-07-26] initialize 控制请求的应答自陈可用模型
+ * （value: default/opus[1m]/sonnet/…，displayName 人读名）。
+ * 运行中切换走 control_request {subtype:"set_model", model}，应答 success 无回显。
+ */
+export interface ClaudeInitializeModels {
+  models?: Array<{ value?: string; displayName?: string }>;
+}
+
 /** [实测] 401 时连发 10 次，attempt 递增。error_status 可能为 null（连接层失败） */
 export interface ClaudeSystemApiRetry {
   type: "system";
