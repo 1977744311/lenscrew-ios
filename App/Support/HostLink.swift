@@ -219,8 +219,12 @@ final class HostLink: Identifiable {
     /// SecureBridgeConnection 内部断线重连不会重走 connect()，只有这里能看到
     private func absorb(linkState state: BridgeLinkState) {
         linkState = state
-        if case .connected = state, secureConnection != nil {
-            Task { await self.sendPushRegistration() }
+        if case .connected = state {
+            // 内部自动重连成功不经 start()，挂在全局错误条上的旧连接错误在此清掉
+            reportError(nil)
+            if secureConnection != nil {
+                Task { await self.sendPushRegistration() }
+            }
         }
     }
 

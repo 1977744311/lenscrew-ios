@@ -169,8 +169,15 @@ export async function installService(inputs: InstallServiceInputs): Promise<void
   writeFileSync(plistPath, plist, { mode: 0o600 });
   chmodSync(plistPath, 0o600);
 
-  // 重装 = 先卸旧再装新;bootout 失败(之前没装过)是正常路径
+  // 重装 = 先卸旧再装新;bootout 失败(之前没装过)是正常路径。
+  // bootout 是异步的,旧实例没退干净就 bootstrap 会报 5: Input/output error,
+  // 轮询到 label 真正消失再装。
   await launchctl(["bootout", `${guiDomain()}/${SERVICE_LABEL}`]);
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const probe = await launchctl(["print", `${guiDomain()}/${SERVICE_LABEL}`]);
+    if (probe.code !== 0) break;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
   const result = await launchctl(["bootstrap", guiDomain(), plistPath]);
   if (result.code !== 0) {
     throw new Error(`launchctl bootstrap 失败: ${result.stderr.trim() || result.stdout.trim()}`);

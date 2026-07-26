@@ -319,13 +319,26 @@ struct HomeScreen: View {
         .padding(.vertical, 12)
     }
 
+    /// 文字行在上、全宽进度条在下：模型专属桶的 label 可能很长
+    /// （如 GPT-5.3-Codex-Spark），塞进固定窄列会竖排成一个字一行
     private func quotaWindowRow(_ window: QuotaWindow) -> some View {
         let remaining = max(0, min(100, 100 - window.usedPercent))
-        return HStack(spacing: 10) {
-            Text(window.label ?? windowName(mins: window.windowDurationMins) ?? "窗口")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(LC.text2)
-                .frame(width: 34, alignment: .leading)
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text(window.label ?? windowName(mins: window.windowDurationMins) ?? "窗口")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(LC.text2)
+                    .lineLimit(1)
+                Spacer(minLength: 8)
+                Text("剩 \(remaining)%")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(LC.text)
+                if let reset = resetText(window.resetsAt) {
+                    Text(reset)
+                        .font(.system(size: 11))
+                        .foregroundStyle(LC.text3)
+                }
+            }
             GeometryReader { geo in
                 ZStack(alignment: .leading) {
                     Capsule().fill(LC.elev2)
@@ -335,14 +348,6 @@ struct HomeScreen: View {
                 }
             }
             .frame(height: 6)
-            Text("剩 \(remaining)%")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(LC.text)
-                .frame(width: 52, alignment: .trailing)
-            Text(resetText(window.resetsAt) ?? "")
-                .font(.system(size: 11))
-                .foregroundStyle(LC.text3)
-                .frame(width: 74, alignment: .trailing)
         }
     }
 
