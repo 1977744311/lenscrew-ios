@@ -70,7 +70,11 @@ struct SessionScreen: View {
                 if let approval = state.pendingApprovals.first {
                     pendingApprovalRow(approval)
                 }
-                composer(state)
+                if state.session.status == .ended || state.session.status == .error {
+                    deadSessionBar(state)
+                } else {
+                    composer(state)
+                }
             }
             .padding(.horizontal, 14)
             .padding(.top, 8)
@@ -652,6 +656,42 @@ struct SessionScreen: View {
             agent: state.session.agent,
             approval: approval
         )
+    }
+
+    /// 死会话把输入区换成结局横条：原生会话还在 agent 自己的状态目录里，
+    /// 可续接时给一键续接（新行出现在首页列表顶部），不可续接就只说明现状
+    private func deadSessionBar(_ state: SessionState) -> some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(state.session.status == .error ? "会话出错了" : "会话已结束")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(LC.text)
+                Text(state.isResumable ? "上下文没丢，续接后从首页进新会话" : "没留下可续接的原生会话")
+                    .font(.system(size: 12))
+                    .foregroundStyle(LC.text2)
+            }
+            Spacer(minLength: 8)
+            if state.isResumable {
+                Button {
+                    Task {
+                        await model.resumeSession(sessionKey)
+                        dismiss()
+                    }
+                } label: {
+                    Label("续接", systemImage: "arrow.uturn.forward")
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 9)
+                        .background(LC.blue, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("session.resume")
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 11)
+        .background(LC.elev, in: RoundedRectangle(cornerRadius: 16))
     }
 
     private func composer(_ state: SessionState) -> some View {

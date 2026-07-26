@@ -17,9 +17,11 @@
 - **统一契约**：codex app-server / claude stream-json / cursor-agent ACP 三条链路归一为同一套会话与审批事件，TS 与 Swift 双语 fixture 锁死线上格式（`protocol/fixtures/`，两侧测试消费同一份 JSON）
 - **手机端六屏 UI**：指挥台 / 会话流水 / 审批 / 新会话 / 眼镜 / 设置，不依赖眼镜即完整可用
 - **会话模式**：新建会话按 agent 选档（codex：只读 / 每步审批 / 按需审批 / 完全放行；claude：plan / default / acceptEdits / bypass；cursor：agent / plan / ask，运行时自陈），会话中也能在输入栏的模式 chip 上随时切换——codex 走 turn 级 policy 覆盖（下一轮生效），claude 走 `set_permission_mode` 控制请求，cursor 走 ACP `session/set_mode`，全部实测验证
+- **模型与推理档**：模型清单由各运行时自陈（codex `model/list`、claude init 自报、cursor `session/new` 自报），新建会话可选，会话页头部也能随时换；codex 的模型另带推理档（minimal / low / medium / high 随模型自陈），新建与会话中都可调
+- **会话韧性**：bridge 把活跃会话的路由表落盘（`~/.lenscrew/sessions.json`），重启后自动续接原生会话——codex 全量回放历史流水，claude / cursor 上下文延续；App 冷接入用 `fromSeq=1` 补拉全部留存事件。死会话（已结束 / 出错）在首页长按或会话页一键「续接」，原生会话都在各 CLI 自己的状态目录里，不会真丢
 - **眼镜端四屏**：会话列表 / 流水 / 块详情 / 审批卡，600×600，在 DAT 0.8.0 硬约束下做整屏替换 + tap-only + 分页
 - **Apple Watch**：腕上审批（允许一次 / 本会话 / 拒绝，可中断）、会话一瞥、听写追加指令、Smart Stack 小组件与七个表盘复杂功能模块（覆盖圆形 / 边角 / 单行 / 矩形全部槽位）；经 WatchConnectivity 由 iPhone 中转，手表不直连 bridge / relay，不持有任何密钥
-- **Codex 账号额度**：bridge 经 `account/rateLimits/read` + `updated` 采集，闲时由探针每 30 分钟校准一次；额度随快照进手表，表盘上直接看剩余百分比与重置窗口。Claude / Cursor 无程序化额度通道（见 Roadmap）
+- **Codex 账号额度**：bridge 经 `account/rateLimits/read` + `updated` 采集，闲时由探针每 30 分钟校准一次；手机指挥台按窗口给进度条与重置时间，额度也随快照进手表表盘。Claude / Cursor 无程序化额度通道（见 Roadmap）
 - **远程接入（脱离 VPN）**：二维码配对 + 端到端加密 + 自架 relay 中继；局域网直连与中继同协议，直连优先、失败回退中继
 - **APNs 推送**：bridge 直连 Apple（token-based .p8，JWT over HTTP/2）；审批到达与轮次完成即使 App 在后台 SSE 已断也能唤起；审批推送带「允许一次 / 拒绝」可操作按钮，锁屏直接裁决
 - **多 Mac**：手机存多台主机（每台一条 Keychain 口令与公钥记录），设置页切换，会话列表标注归属；支持同时保持多条连接、跨主机聚合会话与合并审批队列
@@ -29,8 +31,8 @@
 
 ## Roadmap
 
-- 手机端额度展示：额度数据已进 App 层，指挥台 / 设置页尚未渲染
 - Claude / Cursor 账号额度：两家目前都没有程序化通道（Claude 的 stream-json 只给 token 用量，Cursor ACP 的 usage_update 是上下文占用而非额度），待上游暴露再接
+- 历史分页：codex resume 现在整段回放，超长会话应按页懒加载更早的历史
 - 真机验证：眼镜依赖 Meta Wearables Developer Center 注册与固件 / Meta AI App 版本（见 [眼镜自建](docs/glasses-self-build.md)）；手表 app group 与 APNs 推送在真机上需要开发者账号签名
 
 ## 快速开始
@@ -44,6 +46,16 @@ cd bridge && node bin/lenscrew.ts up --host 0.0.0.0
 ```
 
 默认只监听回环，手机连不上——要连手机得显式给 `--host`（局域网地址或 `0.0.0.0`）或 `--relay`，免得在公共 Wi-Fi 上不知不觉把本机 agent 暴露出去。启动时打印 macDeviceId、身份指纹、访问口令与**终端二维码**；配对窗口开 5 分钟，过期后用 `lenscrew qr` 重开。
+
+日常挂着用建议装成常驻（macOS LaunchAgent，开机自启、崩溃自动拉起、日志落 `~/.lenscrew/logs/bridge.log`）：
+
+```bash
+node bin/lenscrew.ts service install --host 0.0.0.0   # 参数与 up 相同；口令自动生成并固定进 plist
+node bin/lenscrew.ts service status                   # 查看运行状态
+node bin/lenscrew.ts service uninstall                # 停止并卸载
+```
+
+常驻模式口令跨重启不变，手机配对一次即可；bridge 重启后活跃会话自动续接。
 
 **2. 自建 iOS App**（本项目不发安装包）：
 
@@ -63,9 +75,12 @@ CLI 全部表面：
 lenscrew up    [--host 地址] [--port 4311] [--token 口令] [--relay https://…] [--name 设备名] [--state-dir 目录]
 lenscrew qr    [--state-dir 目录]     # 向本机运行中的 bridge 重开 5 分钟配对窗口并重打印二维码
 lenscrew relay [--host 0.0.0.0] [--port 4370]   # 自架中继服务器
+lenscrew service install [up 选项]   # 装成 launchd 常驻：开机自启、崩溃拉起、日志落盘、口令固定
+lenscrew service uninstall           # 停止并卸载常驻
+lenscrew service status              # 常驻状态（state / pid / 上次退出码）
 ```
 
-状态目录 `~/.lenscrew`（可用 `LENSCREW_STATE_DIR` 覆盖，权限 0700）：`identity.json`（Ed25519 身份，0600）、`trusted-phones.json`（可信手机公钥）、`apns.json`（用户手工放置，见推送一节）、`push-tokens.json` 与 `admin.json`（运行时生成）。
+状态目录 `~/.lenscrew`（可用 `LENSCREW_STATE_DIR` 覆盖，权限 0700）：`identity.json`（Ed25519 身份，0600）、`trusted-phones.json`（可信手机公钥）、`apns.json`（用户手工放置，见推送一节）、`push-tokens.json`、`admin.json`、`sessions.json`（活跃会话路由表，重启续接用）与 `logs/`（常驻模式日志）。
 
 ## 远程接入（脱离 VPN）
 
@@ -147,7 +162,8 @@ bridge/                Mac bridge（Node，零运行时依赖）
   src/relay/           自架中继的服务端与 bridge 侧客户端
   src/push/            APNs：配置、HTTP/2 客户端、推送决策
   src/qr/              终端二维码渲染
-  src/state/           ~/.lenscrew 状态目录：身份密钥、手机信任表
+  src/state/           ~/.lenscrew 状态目录：身份密钥、手机信任表、会话路由表
+  src/service/         launchd 常驻安装器（service install/uninstall/status）
 Sources/               LensCrewKit（Swift 6，库层零第三方依赖）
   AgentProtocol/       bridge 契约的 Swift 同构镜像
   BridgeLink/          与 bridge 的连接、SSE 解码

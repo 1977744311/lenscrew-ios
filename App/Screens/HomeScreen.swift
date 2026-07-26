@@ -25,6 +25,9 @@ struct HomeScreen: View {
                         approvalsSection
                     }
                     sessionsSection
+                    if !model.hostQuotas.isEmpty {
+                        quotaSection
+                    }
                 }
                 .padding(.horizontal, 16)
             }
@@ -254,6 +257,13 @@ struct HomeScreen: View {
                         .buttonStyle(.plain)
                         .accessibilityIdentifier("home.sessionCard")
                         .contextMenu {
+                            if item.state.isResumable {
+                                Button {
+                                    Task { await model.resumeSession(item.key) }
+                                } label: {
+                                    Label("续接会话", systemImage: "arrow.uturn.forward.circle")
+                                }
+                            }
                             // 关会话 = 结束 agent 进程并从列表移除；
                             // bridge 重启后不认识的残留行也从这里清掉
                             Button(role: .destructive) {
@@ -267,6 +277,99 @@ struct HomeScreen: View {
                 .background(LC.elev, in: RoundedRectangle(cornerRadius: 20))
             }
         }
+    }
+
+    // MARK: - 账号额度
+
+    /// 账号级额度（quotaProbe 闲时也在喂数据）；手表表盘同源，这里给全量窗口明细
+    private var quotaSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            SectionHeader(title: "额度", trailing: "账号级")
+            VStack(spacing: 0) {
+                ForEach(Array(model.hostQuotas.enumerated()), id: \.element.id) { index, item in
+                    if index > 0 {
+                        Hairline().padding(.leading, 16)
+                    }
+                    quotaRow(item)
+                }
+            }
+            .background(LC.elev, in: RoundedRectangle(cornerRadius: 20))
+        }
+    }
+
+    private func quotaRow(_ item: HostQuota) -> some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 8) {
+                AgentBadge(agent: item.quota.agent)
+                if let plan = item.quota.planType, !plan.isEmpty {
+                    LCChip(fontSize: 10) { Text(plan) }
+                }
+                Spacer()
+                if model.hosts.hosts.count > 1 {
+                    Text(item.hostName)
+                        .font(.system(size: 11))
+                        .foregroundStyle(LC.text3)
+                }
+            }
+            ForEach(item.quota.windows) { window in
+                quotaWindowRow(window)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+    }
+
+    private func quotaWindowRow(_ window: QuotaWindow) -> some View {
+        let remaining = max(0, min(100, 100 - window.usedPercent))
+        return HStack(spacing: 10) {
+            Text(window.label ?? windowName(mins: window.windowDurationMins) ?? "窗口")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(LC.text2)
+                .frame(width: 34, alignment: .leading)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule().fill(LC.elev2)
+                    Capsule()
+                        .fill(quotaColor(remaining: remaining))
+                        .frame(width: geo.size.width * CGFloat(remaining) / 100)
+                }
+            }
+            .frame(height: 6)
+            Text("剩 \(remaining)%")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(LC.text)
+                .frame(width: 52, alignment: .trailing)
+            Text(resetText(window.resetsAt) ?? "")
+                .font(.system(size: 11))
+                .foregroundStyle(LC.text3)
+                .frame(width: 74, alignment: .trailing)
+        }
+    }
+
+    private func quotaColor(remaining: Int) -> Color {
+        if remaining <= 10 { return LC.red }
+        if remaining <= 30 { return LC.orange }
+        return LC.green
+    }
+
+    /// windowDurationMins → 人读窗口名（与手表表盘同一套口径）：300 → "5h"、10080 → "周"
+    private func windowName(mins: Int?) -> String? {
+        guard let mins, mins > 0 else { return nil }
+        if mins % 43200 == 0 { return mins == 43200 ? "月" : "\(mins / 43200)月" }
+        if mins % 10080 == 0 { return mins == 10080 ? "周" : "\(mins / 10080)周" }
+        if mins % 1440 == 0 { return mins == 1440 ? "日" : "\(mins / 1440)天" }
+        if mins % 60 == 0 { return "\(mins / 60)h" }
+        return "\(mins)m"
+    }
+
+    private func resetText(_ resetsAt: Int64?) -> String? {
+        guard let resetsAt else { return nil }
+        let date = Date(timeIntervalSince1970: TimeInterval(resetsAt))
+        let mins = Int(date.timeIntervalSinceNow / 60)
+        guard mins > 0 else { return nil }
+        if mins < 60 { return "\(mins) 分钟后重置" }
+        if mins < 48 * 60 { return "\(mins / 60) 小时后重置" }
+        return "\(mins / 1440) 天后重置"
     }
 
     /// agent 过滤：一键只看某个运行时，对聚合列表生效。只给有会话的 agent 出 chip。

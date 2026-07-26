@@ -68,6 +68,15 @@ public actor CrewCoordinator {
         )
     }
 
+    /// 续接死会话：原生会话仍在各 CLI 的状态目录里，bridge 会开一个新会话行接上它。
+    /// 新会话以 sessionCreated 广播出现，旧行由调用方自行关闭。
+    public func resumeSession(
+        agent: AgentKind, nativeID: String, workspaceRoot: String
+    ) async throws {
+        try await bridge.send(
+            .resumeSession(agent: agent, nativeID: nativeID, workspaceRoot: workspaceRoot))
+    }
+
     public func sendMessage(_ text: String, to sessionID: String) async throws {
         try await bridge.send(.sendMessage(sessionID: sessionID, text: text))
     }

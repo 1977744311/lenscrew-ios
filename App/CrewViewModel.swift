@@ -40,6 +40,13 @@ struct AggregatedSession: Identifiable, Sendable {
     var id: SessionKey { key }
 }
 
+extension SessionState {
+    /// 死会话且留有原生会话 id 才能续接（原生会话在各 CLI 的状态目录里没丢）
+    var isResumable: Bool {
+        (session.status == .ended || session.status == .error) && session.nativeId != nil
+    }
+}
+
 /// 一台主机上一个 agent 的账号额度投影；Watch 转发额度时也照这个形状取数
 struct HostQuota: Identifiable, Sendable {
     let hostID: UUID
@@ -438,6 +445,24 @@ final class CrewViewModel {
     func setSessionReasoningEffort(_ key: SessionKey, effort: String) async {
         await run(on: key.hostID) {
             try await $0.setSessionReasoningEffort(key.sessionID, effort: effort)
+        }
+    }
+
+    /// 续接死会话：先撤旧行（死进程 close 幂等，bridge 不认识就只清本地），
+    /// 再让 bridge 按原生会话 id 开新行接上。新行按更新时间排在首页列表顶部。
+    func resumeSession(_ key: SessionKey) async {
+        guard let state = sessionState(for: key),
+              let nativeID = state.session.nativeId
+        else {
+            lastError = "该会话没留下原生会话 id，无法续接"
+            return
+        }
+        let agent = state.session.agent
+        let workspaceRoot = state.session.workspaceRoot
+        await closeSession(key)
+        await run(on: key.hostID) {
+            try await $0.resumeSession(
+                agent: agent, nativeID: nativeID, workspaceRoot: workspaceRoot)
         }
     }
 
