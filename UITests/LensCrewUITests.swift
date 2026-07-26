@@ -102,6 +102,17 @@ final class LensCrewUITests: XCTestCase {
         }
         XCTAssertTrue(element(app, "newSession.start").exists, "「开始会话」按钮缺席")
 
+        // 模式档位随 agent 变化：codex 有 auto 档，切到 cursor 换成 ask 档
+        XCTAssertTrue(
+            element(app, "newSession.mode.auto").exists, "codex 的模式列表缺自动档"
+        )
+        element(app, "newSession.agent.cursor").tap()
+        XCTAssertTrue(
+            element(app, "newSession.mode.ask").waitForExistence(timeout: 5),
+            "cursor 的模式列表缺问答档"
+        )
+        XCTAssertFalse(element(app, "newSession.mode.auto").exists, "cursor 不该有 codex 的档位")
+
         app.buttons["取消"].firstMatch.tap()
         waitForDisappearance(of: element(app, "newSession.start"), "新会话 sheet 没收起")
     }

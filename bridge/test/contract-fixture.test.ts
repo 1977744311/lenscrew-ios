@@ -85,6 +85,12 @@ function rebuildSession(value: AgentSession): AgentSession {
     model: value.model,
     status: value.status,
     capabilities: rebuildCapabilities(value.capabilities),
+    modeId: value.modeId,
+    modes: value.modes.map((mode) => ({
+      id: mode.id,
+      label: mode.label,
+      detail: mode.detail,
+    })),
     createdAtMs: value.createdAtMs,
     updatedAtMs: value.updatedAtMs,
   };

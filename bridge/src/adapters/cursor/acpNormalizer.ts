@@ -364,6 +364,9 @@ export class CursorAcpNormalizer implements ProtocolNormalizer<AcpWireMessage> {
           ? [{ type: "titleResolved", title: singleLine(title) }]
           : [];
       }
+      // [实测] session/set_mode 成功前 agent 先推这条——模式切换的权威回显
+      case "current_mode_update":
+        return [{ type: "modeResolved", modeId: update.currentModeId }];
       default:
         // available_commands_update 是本机 slash 命令清单，usage_update 给的是
         // 上下文窗口占用而不是本轮用量，两者在契约里都没有落点
@@ -417,6 +420,20 @@ export class CursorAcpNormalizer implements ProtocolNormalizer<AcpWireMessage> {
       if (sessionId !== undefined) events.push({ type: "nativeIdAssigned", nativeId: sessionId });
       const model = result?.models?.currentModelId;
       if (model !== undefined) events.push({ type: "modelResolved", model });
+      // 模式清单以运行时自陈为准（agent/plan/ask 是 2026.07.23 的实测值，
+      // 上游加档后这里自动跟上，adapter 的静态表只是启动前的兜底）
+      const modes = result?.modes;
+      if (modes !== undefined) {
+        events.push({
+          type: "modesResolved",
+          modes: modes.availableModes.map((mode) => ({
+            id: mode.id,
+            label: mode.name ?? mode.id,
+            detail: mode.description ?? "",
+          })),
+        });
+        events.push({ type: "modeResolved", modeId: modes.currentModeId });
+      }
       events.push({ type: "status", status: "idle" });
       return events;
     }

@@ -4,7 +4,7 @@ import type {
   AgentQuotaSnapshot,
   ApprovalOutcome,
   ApprovalRequest,
-  SessionMode,
+  SessionModeOption,
   SessionStatus,
   TranscriptBlock,
   TranscriptBlockPatch,
@@ -44,6 +44,10 @@ export type AdapterEvent =
    * SessionHub 不给它编号也不进会话日志，而是并入 host 级缓存后另行广播。
    */
   | { type: "quotaUpdated"; quota: AgentQuotaSnapshot }
+  /** 运行时回显的当前模式（claude 的 system/status、cursor 的 current_mode_update） */
+  | { type: "modeResolved"; modeId: string }
+  /** 运行时自陈的可用模式清单（cursor 的 session/new 响应），覆盖 adapter 的静态表 */
+  | { type: "modesResolved"; modes: SessionModeOption[] }
   | { type: "error"; message: string; fatal: boolean };
 
 /**
@@ -64,7 +68,8 @@ export interface ProtocolNormalizer<TMessage> {
 export interface AdapterStartOptions {
   workspaceRoot: string;
   model: string | null;
-  mode: SessionMode;
+  /** 见 SessionModeOption.id；null 用 adapter 的缺省档 */
+  modeId: string | null;
   /** 续接已有会话；null 表示开新会话 */
   resumeNativeId: string | null;
 }
@@ -82,6 +87,12 @@ export interface AgentAdapter {
    * adapter **不要**自己再发 `capabilitiesResolved`，否则会多广播一次。
    */
   readonly capabilities: AgentCapabilities;
+  /** 可选模式清单（静态自陈；cursor 运行中自陈更新经 modesResolved 事件） */
+  readonly modes: SessionModeOption[];
+  /** 创建时未指定 modeId 的缺省档；无模式概念时为 null */
+  readonly defaultModeId: string | null;
+  /** 当前生效的模式；hub 用它填会话快照初值 */
+  readonly currentModeId: string | null;
 
   start(options: AdapterStartOptions): Promise<void>;
   /**
@@ -95,6 +106,11 @@ export interface AgentAdapter {
    * 收到本调用应当抛错而不是静默吞掉——静默吞掉会让手机端以为批准生效了。
    */
   resolveApproval(approvalId: string, optionId: string): Promise<void>;
+  /**
+   * 会话中切换模式。生效后 adapter 发 `modeResolved` 回显；
+   * 未知 modeId 抛错并把合法取值写进错误信息。
+   */
+  setMode(modeId: string): Promise<void>;
   close(): Promise<void>;
 }
 

@@ -17,7 +17,8 @@ struct CrewStoreTests {
             session: AgentSession(
                 id: id, agent: .codex, nativeId: nil, workspaceRoot: "/tmp",
                 title: "t", model: nil, status: .starting,
-                capabilities: capabilities, createdAtMs: 0, updatedAtMs: 0
+                capabilities: capabilities, modeId: nil, modes: [],
+                createdAtMs: 0, updatedAtMs: 0
             )
         )
     }

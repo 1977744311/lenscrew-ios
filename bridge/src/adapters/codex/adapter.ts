@@ -6,6 +6,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import type {
   AgentCapabilities,
   AgentKind,
+  SessionModeOption,
 } from "../../protocol/events.ts";
 import type {
   AdapterEventSink,
@@ -22,9 +23,22 @@ import {
   type CodexThreadResumeParams,
   type CodexThreadStartParams,
   type CodexTurnInterruptParams,
+  type CodexTurnSandboxPolicy,
   type CodexTurnStartParams,
   type CodexTurnSteerParams,
 } from "./protocol.ts";
+
+/** thread 级 sandbox 是字符串、turn 级是对象，两个 API 的形态不一致 */
+function turnSandboxPolicy(sandbox: CodexSandboxMode): CodexTurnSandboxPolicy {
+  switch (sandbox) {
+    case "read-only":
+      return { type: "readOnly" };
+    case "danger-full-access":
+      return { type: "dangerFullAccess" };
+    case "workspace-write":
+      return { type: "workspaceWrite" };
+  }
+}
 
 export interface CodexAdapterOptions {
   sink: AdapterEventSink;
@@ -57,12 +71,27 @@ const CODEX_CAPABILITIES: AgentCapabilities = {
   streamingDeltas: true,
 };
 
+/**
+ * 四档模式，对齐 ChatGPT Codex 的 Read only / Auto / Full access，
+ * 外加保留"每步审批"这一最保守档（也是历史默认行为）。
+ * 各档位翻译成 approvalPolicy × sandbox 的组合，见 #policyFor。
+ */
+const CODEX_MODES: SessionModeOption[] = [
+  { id: "plan", label: "计划 · 只读", detail: "只读沙箱，能读能想，不改文件不执行" },
+  { id: "default", label: "默认 · 每步审批", detail: "每条命令先问过你再执行" },
+  { id: "auto", label: "自动 · 按需审批", detail: "工作区内自动干活，越界操作才来问" },
+  { id: "full", label: "完全放行", detail: "不问审批、全盘可写——只给完全信任的仓库" },
+];
+const CODEX_DEFAULT_MODE = "default";
+
 /** 保留最近若干行 stderr，进程猝死时用来给出可读原因 */
 const STDERR_TAIL_LINES = 20;
 
 export class CodexAdapter implements AgentAdapter {
   readonly kind: AgentKind = "codex";
   readonly capabilities: AgentCapabilities = CODEX_CAPABILITIES;
+  readonly modes: SessionModeOption[] = CODEX_MODES;
+  readonly defaultModeId: string = CODEX_DEFAULT_MODE;
 
   readonly #sink: AdapterEventSink;
   readonly #command: string;
@@ -75,12 +104,17 @@ export class CodexAdapter implements AgentAdapter {
   #stdoutBuffer = "";
   #nextRequestId = 1;
   #threadId: string | null = null;
+  #modeId: string = CODEX_DEFAULT_MODE;
   #closing = false;
 
   constructor(options: CodexAdapterOptions) {
     this.#sink = options.sink;
     this.#command = options.command ?? "codex";
     this.#shutdownGraceMs = options.shutdownGraceMs ?? 2000;
+  }
+
+  get currentModeId(): string {
+    return this.#modeId;
   }
 
   async start(options: AdapterStartOptions): Promise<void> {
@@ -120,7 +154,8 @@ export class CodexAdapter implements AgentAdapter {
       })
       .catch(() => {});
 
-    const { approvalPolicy, sandbox } = this.#policyFor(options.mode);
+    this.#modeId = this.#validateMode(options.modeId ?? CODEX_DEFAULT_MODE);
+    const { approvalPolicy, sandbox } = this.#policyFor(this.#modeId);
     if (options.resumeNativeId !== null) {
       const params: CodexThreadResumeParams = {
         threadId: options.resumeNativeId,
@@ -175,8 +210,25 @@ export class CodexAdapter implements AgentAdapter {
       return;
     }
 
-    const params: CodexTurnStartParams = { threadId, input };
+    // 每轮都带当前档位（幂等）：这是 codex 官方的模式切换通道——
+    // turn 级 policy 的语义是 "override for this turn and subsequent turns"
+    const { approvalPolicy, sandbox } = this.#policyFor(this.#modeId);
+    const params: CodexTurnStartParams = {
+      threadId,
+      input,
+      approvalPolicy,
+      sandboxPolicy: turnSandboxPolicy(sandbox),
+    };
     await this.#request("turn/start", params);
+  }
+
+  /**
+   * codex 没有独立的"改模式"请求：切换记在 adapter 上，下一轮 turn/start
+   * 随 policy 生效。运行中的 turn 沿用旧档（steer 不带 policy）。
+   */
+  async setMode(modeId: string): Promise<void> {
+    this.#modeId = this.#validateMode(modeId);
+    this.#sink({ type: "modeResolved", modeId: this.#modeId });
   }
 
   async interrupt(): Promise<void> {
@@ -216,15 +268,29 @@ export class CodexAdapter implements AgentAdapter {
     this.#failPending(new Error("codex adapter 已关闭"));
   }
 
-  /** plan 模式靠只读沙箱 + 不询问审批实现：读得到、想得了、写不了 */
-  #policyFor(mode: AdapterStartOptions["mode"]): {
+  /** 档位 → approvalPolicy × sandbox。plan 靠只读沙箱 + 不询问实现：读得到、写不了 */
+  #policyFor(modeId: string): {
     approvalPolicy: CodexAskForApproval;
     sandbox: CodexSandboxMode;
   } {
-    if (mode === "plan") {
-      return { approvalPolicy: "never", sandbox: "read-only" };
+    switch (modeId) {
+      case "plan":
+        return { approvalPolicy: "never", sandbox: "read-only" };
+      case "auto":
+        return { approvalPolicy: "on-request", sandbox: "workspace-write" };
+      case "full":
+        return { approvalPolicy: "never", sandbox: "danger-full-access" };
+      default:
+        return { approvalPolicy: "untrusted", sandbox: "workspace-write" };
     }
-    return { approvalPolicy: "untrusted", sandbox: "workspace-write" };
+  }
+
+  #validateMode(modeId: string): string {
+    if (!CODEX_MODES.some((mode) => mode.id === modeId)) {
+      const valid = CODEX_MODES.map((mode) => mode.id).join(", ");
+      throw new Error(`未知的 codex 模式 ${modeId}（可用：${valid}）`);
+    }
+    return modeId;
   }
 
   #requireThreadId(): string {

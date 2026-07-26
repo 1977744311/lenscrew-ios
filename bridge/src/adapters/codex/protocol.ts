@@ -487,9 +487,25 @@ export interface CodexThreadResumeParams {
   model?: string;
 }
 
+/**
+ * turn 级 sandbox 是**对象形态**，与 thread/start 的字符串形态不同
+ * （generate-json-schema 的 TurnStartParams.sandboxPolicy 实测确认，2026-07-26）。
+ */
+export type CodexTurnSandboxPolicy =
+  | { type: "readOnly" }
+  | { type: "workspaceWrite" }
+  | { type: "dangerFullAccess" };
+
+/**
+ * approvalPolicy/sandboxPolicy 的 schema 注释是
+ * "Override the approval policy for this turn and subsequent turns"——
+ * 这就是官方的会话中切换通道：每轮 turn 下发当前档位即可。
+ */
 export interface CodexTurnStartParams {
   threadId: string;
   input: CodexUserInput[];
+  approvalPolicy?: CodexAskForApproval;
+  sandboxPolicy?: CodexTurnSandboxPolicy;
 }
 
 /** expectedTurnId 对不上会被拒，所以 adapter 必须自己盯住当前 turnId */

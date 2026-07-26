@@ -32,12 +32,26 @@ const APPROVAL_TRIGGER = "需要审批";
 class ScriptedAdapter implements AgentAdapter {
   readonly kind = "codex" as const;
   readonly capabilities = CAPABILITIES;
+  readonly modes = [
+    { id: "default", label: "默认 · 每步审批", detail: "每条命令先问过你再执行" },
+    { id: "full", label: "完全放行", detail: "不问审批" },
+  ];
+  readonly defaultModeId = "default";
+  currentModeId = "default";
   readonly #sink: AdapterEventSink;
   #blockOrdinal = 0;
   #pendingApprovalId: string | null = null;
 
   constructor(sink: AdapterEventSink) {
     this.#sink = sink;
+  }
+
+  async setMode(modeId: string): Promise<void> {
+    if (!this.modes.some((mode) => mode.id === modeId)) {
+      throw new Error(`未知模式 ${modeId}`);
+    }
+    this.currentModeId = modeId;
+    this.#sink({ type: "modeResolved", modeId });
   }
 
   async start(): Promise<void> {

@@ -12,8 +12,13 @@ struct NewSessionSheet: View {
     @State private var selectedRoot: String?
     @State private var customRoot = ""
     @State private var editingCustomRoot = false
-    @State private var mode: SessionMode = .default
+    /// nil = 跟随所选 agent 的默认档
+    @State private var modeID: String?
     @FocusState private var customRootFocused: Bool
+
+    private var effectiveModeID: String {
+        modeID ?? AgentModes.defaultModeID(for: agent)
+    }
 
     /// 生效的工作目录：行内输入优先于 MRU 选择
     private var effectiveRoot: String {
@@ -60,9 +65,10 @@ struct NewSessionSheet: View {
             LCButton(title: "开始会话", kind: .primary) {
                 guard let target = targetHostID else { return }
                 let root = effectiveRoot
+                let chosenMode = effectiveModeID
                 Task {
                     await model.createSession(
-                        agent: agent, workspaceRoot: root, mode: mode, on: target
+                        agent: agent, workspaceRoot: root, modeID: chosenMode, on: target
                     )
                 }
                 dismiss()
@@ -80,6 +86,12 @@ struct NewSessionSheet: View {
         .onAppear {
             if selectedRoot == nil {
                 selectedRoot = model.hosts.workspaceRoots.first
+            }
+        }
+        // 换 agent 后档位集合不同（codex 的 auto 在 claude 没有），回到新 agent 的默认档
+        .onChange(of: agent) { _, fresh in
+            if let modeID, !AgentModes.options(for: fresh).contains(where: { $0.id == modeID }) {
+                self.modeID = nil
             }
         }
     }
@@ -282,32 +294,57 @@ struct NewSessionSheet: View {
 
     // MARK: - 模式
 
+    /// 档位随所选 agent 变化——三家的审批/沙箱语义真实存在差异，不硬拉齐。
+    /// 会话中还可以在会话页的模式 chip 上随时切换。
     private var modeSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        let options = AgentModes.options(for: agent)
+        return VStack(alignment: .leading, spacing: 8) {
             SectionHeader(title: "模式")
-            HStack(spacing: 0) {
-                modeSegment(.default, label: "默认")
-                modeSegment(.plan, label: "计划 · 只读")
+            VStack(spacing: 0) {
+                ForEach(Array(options.enumerated()), id: \.element.id) { index, option in
+                    if index > 0 {
+                        Hairline().padding(.leading, 16)
+                    }
+                    modeRow(option)
+                }
             }
-            .padding(3)
-            .background(LC.elev, in: RoundedRectangle(cornerRadius: 12))
+            .background(LC.elev, in: RoundedRectangle(cornerRadius: 20))
         }
     }
 
-    private func modeSegment(_ target: SessionMode, label: String) -> some View {
-        let selected = mode == target
+    private func modeRow(_ option: SessionModeOption) -> some View {
+        let selected = effectiveModeID == option.id
+        let dangerous = AgentModes.isDangerous(option.id)
         return Button {
-            mode = target
+            modeID = option.id
         } label: {
-            Text(label)
-                .font(.system(size: 14, weight: selected ? .semibold : .regular))
-                .foregroundStyle(selected ? LC.text : LC.text2)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 8)
-                .background(
-                    selected ? LC.elev2 : .clear, in: RoundedRectangle(cornerRadius: 10)
-                )
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(option.label)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(dangerous ? LC.red : LC.text)
+                    Text(option.detail)
+                        .font(.system(size: 12))
+                        .foregroundStyle(LC.text3)
+                }
+                Spacer()
+                if selected {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 22, height: 22)
+                        .background(dangerous ? LC.red : LC.blue, in: Circle())
+                } else {
+                    Circle()
+                        .strokeBorder(LC.elev2, lineWidth: 1.5)
+                        .frame(width: 22, height: 22)
+                }
+            }
+            .padding(.horizontal, 16)
+            .padding(.vertical, 11)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .accessibilityIdentifier("newSession.mode.\(option.id)")
     }
 }

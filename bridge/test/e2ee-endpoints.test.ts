@@ -86,6 +86,8 @@ function sampleSession(id: string): AgentSession {
       resume: true,
       streamingDeltas: true,
     },
+    modeId: "default",
+    modes: [{ id: "default", label: "默认", detail: "每步审批" }],
     createdAtMs: 1,
     updatedAtMs: 1,
   };

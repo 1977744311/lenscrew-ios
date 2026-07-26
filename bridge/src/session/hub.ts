@@ -5,7 +5,6 @@ import type {
   BridgeEvent,
   ClientCommand,
   QuotaWindow,
-  SessionMode,
 } from "../protocol/events.ts";
 import type { AdapterEvent, AgentAdapter } from "../adapters/types.ts";
 
@@ -27,7 +26,11 @@ const MAX_RETAINED_EVENTS = 5000;
  * 跟着变成最新状态——那样事件日志就在谎报历史。
  */
 function snapshot(session: AgentSession): AgentSession {
-  return { ...session, capabilities: { ...session.capabilities } };
+  return {
+    ...session,
+    capabilities: { ...session.capabilities },
+    modes: session.modes.map((mode) => ({ ...mode })),
+  };
 }
 
 /** 主桶 "codex" 的窗口排最前，其余按 id 字典序；顺序稳定合并去重才可比 */
@@ -129,7 +132,7 @@ export class SessionHub {
           command.agent,
           command.workspaceRoot,
           command.model,
-          command.mode,
+          command.modeId,
           null,
         );
         return;
@@ -139,7 +142,7 @@ export class SessionHub {
           command.agent,
           command.workspaceRoot,
           null,
-          "default",
+          null,
           command.nativeId,
         );
         return;
@@ -161,6 +164,14 @@ export class SessionHub {
           );
         }
         await record.adapter.resolveApproval(command.approvalId, command.optionId);
+        return;
+      }
+
+      case "setSessionMode": {
+        const record = this.#require(command.sessionId);
+        // adapter 生效后经 modeResolved 回显（codex 立即、claude/cursor 由
+        // 运行时确认），会话快照在那一步统一刷新
+        await record.adapter.setMode(command.modeId);
         return;
       }
 
@@ -208,7 +219,7 @@ export class SessionHub {
     agent: AgentKind,
     workspaceRoot: string,
     model: string | null,
-    mode: SessionMode,
+    modeId: string | null,
     resumeNativeId: string | null,
   ): Promise<void> {
     // 先定 id 再造 adapter：sink 要按 id 回查记录，而记录要用 adapter 的 capabilities。
@@ -229,6 +240,8 @@ export class SessionHub {
         model,
         status: "starting",
         capabilities: adapter.capabilities,
+        modeId: modeId ?? adapter.defaultModeId,
+        modes: adapter.modes,
         createdAtMs: now,
         updatedAtMs: now,
       },
@@ -237,7 +250,7 @@ export class SessionHub {
     this.#emit(record, { type: "sessionCreated", session: record.session });
 
     try {
-      await adapter.start({ workspaceRoot, model, mode, resumeNativeId });
+      await adapter.start({ workspaceRoot, model, modeId, resumeNativeId });
       // sessionCreated 必须早于 start()，否则启动期间的事件没有会话可归属；
       // 但真实能力要 start() 之后才确定，所以这里补一次快照修正它。
       this.#emit(record, { type: "capabilitiesResolved" });
@@ -275,11 +288,15 @@ export class SessionHub {
       event.type === "nativeIdAssigned" ||
       event.type === "modelResolved" ||
       event.type === "titleResolved" ||
-      event.type === "capabilitiesResolved"
+      event.type === "capabilitiesResolved" ||
+      event.type === "modeResolved" ||
+      event.type === "modesResolved"
     ) {
       if (event.type === "nativeIdAssigned") record.session.nativeId = event.nativeId;
       if (event.type === "modelResolved") record.session.model = event.model;
       if (event.type === "titleResolved") record.session.title = event.title;
+      if (event.type === "modeResolved") record.session.modeId = event.modeId;
+      if (event.type === "modesResolved") record.session.modes = event.modes;
       record.session.capabilities = record.adapter.capabilities;
       this.#publish(record, {
         type: "sessionUpdated",

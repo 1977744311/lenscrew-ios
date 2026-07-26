@@ -34,8 +34,6 @@ final class HostLink: Identifiable {
     /// 本主机的账号级额度，按 agent 各留最新一份（目前只有 codex 有通道）。
     /// bridge 在接入时会补发缓存快照，断线重连后立即恢复，无需本地持久化
     private(set) var quota: [AgentKind: AgentQuotaSnapshot] = [:]
-    /// 本主机上由本机发起创建的会话的模式
-    private(set) var sessionModes: [String: SessionMode] = [:]
     /// VM 按 hostID 路由动作时直接取用；断开为 nil
     private(set) var coordinator: CrewCoordinator?
 
@@ -48,8 +46,6 @@ final class HostLink: Identifiable {
     /// 本主机为 paired 时的安全连接（registerPush 只有它有）
     private var secureConnection: SecureBridgeConnection?
     private var pumps: [Task<Void, Never>] = []
-    /// 等待与 sessionCreated 配对的创建模式（FIFO，见 digest）
-    private var pendingModes: [SessionMode] = []
     /// 旁路流里看到的每个会话最后一个块，turnCompleted 锚点用
     private var lastBlockID: [String: String] = [:]
     private var autoPresentApprovals: Bool
@@ -240,8 +236,6 @@ final class HostLink: Identifiable {
         glassScreen = .sessionList
         turnMarkers = [:]
         quota = [:]
-        sessionModes = [:]
-        pendingModes = []
         lastBlockID = [:]
         latencyMs = nil
         linkState = .disconnected
@@ -294,20 +288,10 @@ final class HostLink: Identifiable {
 
     // MARK: - 会话侧信息
 
-    /// createSession 发送成功后登记，等 digest 里的 sessionCreated 配对
-    func notePendingMode(_ mode: SessionMode) {
-        pendingModes.append(mode)
-    }
-
-    /// 旁路事件消化：只取协调层不外露的信息（轮次用量、创建模式配对），
+    /// 旁路事件消化：只取协调层不外露的信息（轮次用量、额度），
     /// 会话状态本身仍以 coordinator 的快照为准，两边不重复建状态机。
     private func digest(_ event: BridgeEvent) {
         switch event {
-        case let .sessionCreated(_, session):
-            if !pendingModes.isEmpty {
-                sessionModes[session.id] = pendingModes.removeFirst()
-            }
-
         case let .blockAppended(_, sessionID, block):
             lastBlockID[sessionID] = block.id
 

@@ -16,7 +16,8 @@ private func makeApprovalItem(
     let session = AgentSession(
         id: "s-\(ordinal)", agent: .codex, nativeId: nil, workspaceRoot: "/tmp/x",
         title: "会话 \(ordinal)", model: nil, status: .awaitingApproval,
-        capabilities: capabilities, createdAtMs: 0, updatedAtMs: Int64(ordinal)
+        capabilities: capabilities, modeId: nil, modes: [],
+        createdAtMs: 0, updatedAtMs: Int64(ordinal)
     )
     let approval = ApprovalRequest(
         id: "ap-\(ordinal)", kind: .shellCommand, title: "运行 shell 命令", detail: detail,
@@ -37,7 +38,8 @@ private func makeAggregatedSession(
         session: AgentSession(
             id: "s-\(ordinal)", agent: .claude, nativeId: nil, workspaceRoot: "/tmp/x",
             title: "会话 \(ordinal)", model: nil, status: .running,
-            capabilities: capabilities, createdAtMs: 0, updatedAtMs: Int64(ordinal)
+            capabilities: capabilities, modeId: nil, modes: [],
+        createdAtMs: 0, updatedAtMs: Int64(ordinal)
         )
     )
     state.blocks = blocks

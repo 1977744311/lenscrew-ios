@@ -58,17 +58,22 @@ public actor CrewCoordinator {
 
     public func createSession(
         agent: AgentKind, workspaceRoot: String,
-        model: String? = nil, mode: SessionMode = .default
+        model: String? = nil, modeID: String? = nil
     ) async throws {
         try await bridge.send(
             .createSession(
-                agent: agent, workspaceRoot: workspaceRoot, model: model, mode: mode
+                agent: agent, workspaceRoot: workspaceRoot, model: model, modeID: modeID
             )
         )
     }
 
     public func sendMessage(_ text: String, to sessionID: String) async throws {
         try await bridge.send(.sendMessage(sessionID: sessionID, text: text))
+    }
+
+    /// 切换会话模式；生效以 bridge 回推的 sessionUpdated（modeId 变化）为准
+    public func setSessionMode(_ sessionID: String, modeID: String) async throws {
+        try await bridge.send(.setSessionMode(sessionID: sessionID, modeID: modeID))
     }
 
     public func interrupt(_ sessionID: String) async throws {

@@ -135,7 +135,7 @@ struct EndToEndTests {
         try await connection.send(
             .createSession(
                 agent: .codex, workspaceRoot: "/tmp/lenscrew-e2e",
-                model: nil, mode: .default
+                model: nil, modeID: nil
             )
         )
         #expect(
@@ -216,7 +216,7 @@ struct EndToEndTests {
         try await connection.send(
             .createSession(
                 agent: .codex, workspaceRoot: "/tmp/lenscrew-e2e",
-                model: nil, mode: .default
+                model: nil, modeID: nil
             )
         )
         #expect(await waitUntil({ await !coordinator.sessions.isEmpty }))
@@ -265,7 +265,7 @@ struct EndToEndTests {
         try await connection.send(
             .createSession(
                 agent: .codex, workspaceRoot: "/tmp/lenscrew-e2e",
-                model: nil, mode: .default
+                model: nil, modeID: nil
             )
         )
         #expect(await waitUntil(timeout: .seconds(10)) { await !log.events.isEmpty })
@@ -273,6 +273,51 @@ struct EndToEndTests {
         #expect(elapsed < .seconds(3), "首个事件用了 \(elapsed)，八成又在等心跳")
 
         await connection.disconnect()
+    }
+
+    @Test("会话模式随快照下发，切换后 sessionUpdated 回推新档")
+    func switchesSessionModeOverHTTP() async throws {
+        let bridge = try BridgeProcess()
+        defer { bridge.stop() }
+
+        let connection = HTTPBridgeConnection(endpoint: bridge.endpoint)
+        let log = EventLog()
+        let collector = Task {
+            for await event in connection.events { await log.append(event) }
+        }
+        defer { collector.cancel() }
+
+        try await connection.connect()
+        try await connection.send(
+            .createSession(
+                agent: .codex, workspaceRoot: "/tmp/lenscrew-e2e",
+                model: nil, modeID: nil
+            )
+        )
+        #expect(
+            await waitUntil({
+                await log.contains { event in
+                    if case let .sessionCreated(_, session) = event {
+                        return session.modeId == "default" && !session.modes.isEmpty
+                    }
+                    return false
+                }
+            }),
+            "sessionCreated 快照没带默认模式与档位清单"
+        )
+
+        try await connection.send(.setSessionMode(sessionID: "s-1", modeID: "full"))
+        #expect(
+            await waitUntil({
+                await log.contains { event in
+                    if case let .sessionUpdated(_, session) = event {
+                        return session.modeId == "full"
+                    }
+                    return false
+                }
+            }),
+            "切换模式后没有收到携带新档的 sessionUpdated"
+        )
     }
 
     @Test("真 HTTP 上 git 面板拿到真实仓库的状态并执行暂存")

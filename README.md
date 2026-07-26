@@ -16,6 +16,7 @@
 
 - **统一契约**：codex app-server / claude stream-json / cursor-agent ACP 三条链路归一为同一套会话与审批事件，TS 与 Swift 双语 fixture 锁死线上格式（`protocol/fixtures/`，两侧测试消费同一份 JSON）
 - **手机端六屏 UI**：指挥台 / 会话流水 / 审批 / 新会话 / 眼镜 / 设置，不依赖眼镜即完整可用
+- **会话模式**：新建会话按 agent 选档（codex：只读 / 每步审批 / 按需审批 / 完全放行；claude：plan / default / acceptEdits / bypass；cursor：agent / plan / ask，运行时自陈），会话中也能在输入栏的模式 chip 上随时切换——codex 走 turn 级 policy 覆盖（下一轮生效），claude 走 `set_permission_mode` 控制请求，cursor 走 ACP `session/set_mode`，全部实测验证
 - **眼镜端四屏**：会话列表 / 流水 / 块详情 / 审批卡，600×600，在 DAT 0.8.0 硬约束下做整屏替换 + tap-only + 分页
 - **Apple Watch**：腕上审批（允许一次 / 本会话 / 拒绝，可中断）、会话一瞥、听写追加指令、Smart Stack 小组件与七个表盘复杂功能模块（覆盖圆形 / 边角 / 单行 / 矩形全部槽位）；经 WatchConnectivity 由 iPhone 中转，手表不直连 bridge / relay，不持有任何密钥
 - **Codex 账号额度**：bridge 经 `account/rateLimits/read` + `updated` 采集，闲时由探针每 30 分钟校准一次；额度随快照进手表，表盘上直接看剩余百分比与重置窗口。Claude / Cursor 无程序化额度通道（见 Roadmap）

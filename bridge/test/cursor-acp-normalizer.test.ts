@@ -57,6 +57,9 @@ test("acp 整轮往返归一成契约事件序列", () => {
   assert.deepEqual(shapeOf(runFixture()), [
     "nativeIdAssigned",
     "modelResolved",
+    // session/new 自陈可用模式与当前模式，两条都要出——UI 的模式切换菜单靠它
+    "modesResolved",
+    "modeResolved",
     "status:idle",
     // 用户消息是从我们发出的 session/prompt 造的：cursor 不回显
     "blockAppended:userMessage",
@@ -89,6 +92,44 @@ test("session/new 的响应带出原生会话 id 和当前模型", () => {
     type: "modelResolved",
     model: "gpt-5.4-mini[reasoning=medium]",
   });
+});
+
+test("session/new 的响应带出运行时自陈的模式清单与当前模式", () => {
+  const events = runFixture();
+  assert.deepEqual(events[2], {
+    type: "modesResolved",
+    modes: [
+      {
+        id: "agent",
+        label: "Agent",
+        detail: "Full agent capabilities with tool access",
+      },
+      {
+        id: "plan",
+        label: "Plan",
+        detail: "Read-only mode for planning and designing before implementation",
+      },
+      {
+        id: "ask",
+        label: "Ask",
+        detail: "Q&A mode - no edits or command execution",
+      },
+    ],
+  });
+  assert.deepEqual(events[3], { type: "modeResolved", modeId: "agent" });
+});
+
+test("current_mode_update 通知回显新模式", () => {
+  const normalizer = new CursorAcpNormalizer({ cwd: WORKSPACE, now: () => 1785000000000 });
+  const events = normalizer.normalize({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: "3c95dd9c-dbd0-4c0b-9cb4-9db1d81713f8",
+      update: { sessionUpdate: "current_mode_update", currentModeId: "ask" },
+    },
+  } as AcpWireMessage);
+  assert.deepEqual(events, [{ type: "modeResolved", modeId: "ask" }]);
 });
 
 test("session/request_permission 映射成 approvalRequested，选项照 ACP 给的三项映射", () => {

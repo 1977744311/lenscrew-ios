@@ -3,7 +3,11 @@ import assert from "node:assert/strict";
 
 import { SessionHub } from "../src/session/hub.ts";
 import type { AdapterEvent, AgentAdapter, AdapterEventSink } from "../src/adapters/types.ts";
-import type { AgentCapabilities, BridgeEvent } from "../src/protocol/events.ts";
+import type {
+  AgentCapabilities,
+  BridgeEvent,
+  SessionModeOption,
+} from "../src/protocol/events.ts";
 
 const fullCapabilities: AgentCapabilities = {
   approvals: true,
@@ -14,10 +18,18 @@ const fullCapabilities: AgentCapabilities = {
   streamingDeltas: true,
 };
 
+const fakeModes: SessionModeOption[] = [
+  { id: "default", label: "默认", detail: "每步审批" },
+  { id: "full", label: "完全放行", detail: "不问审批" },
+];
+
 /** 只记录调用、不起进程的假 adapter */
 class FakeAdapter implements AgentAdapter {
   readonly kind = "codex" as const;
   capabilities: AgentCapabilities;
+  readonly modes: SessionModeOption[] = fakeModes;
+  readonly defaultModeId: string = "default";
+  currentModeId: string = "default";
   readonly sink: AdapterEventSink;
   readonly calls: string[] = [];
 
@@ -38,6 +50,11 @@ class FakeAdapter implements AgentAdapter {
   }
   async resolveApproval(approvalId: string, optionId: string): Promise<void> {
     this.calls.push(`approve:${approvalId}:${optionId}`);
+  }
+  async setMode(modeId: string): Promise<void> {
+    this.calls.push(`setMode:${modeId}`);
+    this.currentModeId = modeId;
+    this.sink({ type: "modeResolved", modeId });
   }
   async close(): Promise<void> {
     this.calls.push("close");
@@ -66,9 +83,27 @@ async function openSession(hub: SessionHub): Promise<void> {
     agent: "codex",
     workspaceRoot: "/Users/dev/project",
     model: null,
-    mode: "default",
+    modeId: null,
   });
 }
+
+test("setSessionMode 派发到 adapter，回显后快照携带新模式", async () => {
+  const { hub, events, adapters } = makeHub();
+  await openSession(hub);
+  const created = events.find((event) => event.type === "sessionCreated");
+  assert.ok(created?.type === "sessionCreated");
+  assert.equal(created.session.modeId, "default");
+  assert.deepEqual(
+    created.session.modes.map((mode) => mode.id),
+    ["default", "full"],
+  );
+
+  await hub.handle({ type: "setSessionMode", sessionId: "s-1", modeId: "full" });
+  assert.ok(adapters[0]!.calls.includes("setMode:full"));
+  const updated = events.filter((event) => event.type === "sessionUpdated").at(-1);
+  assert.ok(updated?.type === "sessionUpdated");
+  assert.equal(updated.session.modeId, "full");
+});
 
 test("seq 在会话内连续递增，不留空洞", async () => {
   const { hub, events, adapters } = makeHub();

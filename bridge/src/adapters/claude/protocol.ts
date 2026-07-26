@@ -92,7 +92,18 @@ export interface ClaudeSystemApiRetry {
 }
 
 /**
- * [实测] 其余 system 子类型：status / thinking_tokens / background_tasks_changed /
+ * [实测 2026-07-26] system/status：set_permission_mode 成功后 CLI 推一条，
+ * permissionMode 是切换后的新档（例：{"type":"system","subtype":"status",
+ * "status":null,"permissionMode":"acceptEdits",...}）。这是模式切换的权威回显。
+ */
+export interface ClaudeSystemStatus {
+  type: "system";
+  subtype: "status";
+  permissionMode?: string;
+}
+
+/**
+ * [实测] 其余 system 子类型：thinking_tokens / background_tasks_changed /
  * task_started / task_updated / task_notification。
  * [依据文档] permission_denied（CLI 内嵌字符串里存在，本机未触发到）。
  * 一律忽略——这些是 CLI 内部进度，折不进契约的 8 类 block。
@@ -100,6 +111,23 @@ export interface ClaudeSystemApiRetry {
 export interface ClaudeSystemOther {
   type: "system";
   subtype: string;
+}
+
+/** CLI 的 permission mode 回显 → 档位 id；认不出原样透传（宁可显示生值也不撒谎） */
+export function claudeModeIdFromNative(native: string): string {
+  switch (native) {
+    case "default":
+    case "manual":
+      return "default";
+    case "plan":
+      return "plan";
+    case "acceptEdits":
+      return "acceptEdits";
+    case "bypassPermissions":
+      return "bypass";
+    default:
+      return native;
+  }
 }
 
 /**
@@ -261,6 +289,7 @@ export interface ClaudeControlResponse {
 export type ClaudeMessage =
   | ClaudeSystemInit
   | ClaudeSystemApiRetry
+  | ClaudeSystemStatus
   | ClaudeSystemOther
   | ClaudeAssistantMessage
   | ClaudeUserMessage

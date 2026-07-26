@@ -604,11 +604,7 @@ struct SessionScreen: View {
                 .padding(.horizontal, 6)
             }
             HStack(spacing: 8) {
-                if let mode = model.sessionMode(for: sessionKey) {
-                    LCChip(fontSize: 11.5) {
-                        Text(mode == .plan ? "计划 · 只读" : "默认")
-                    }
-                }
+                modeChip(state)
                 TextField(
                     dictation.isListening ? "正在听写…" : "追加指令，运行中也可排队…",
                     text: $draft, axis: .vertical
@@ -656,6 +652,44 @@ struct SessionScreen: View {
         .overlay(
             RoundedRectangle(cornerRadius: 24).strokeBorder(LC.line, lineWidth: 0.5)
         )
+    }
+
+    /// 模式 chip：点开列出本会话可切换的档位（bridge 快照自陈）。
+    /// codex 的切换从下一轮 turn 生效，claude/cursor 即时生效；
+    /// chip 文本以 bridge 回推的 sessionUpdated 为准，不做乐观更新。
+    @ViewBuilder
+    private func modeChip(_ state: SessionState) -> some View {
+        if let current = model.sessionMode(for: sessionKey) {
+            if state.session.modes.count > 1 {
+                Menu {
+                    Section("会话模式") {
+                        ForEach(state.session.modes) { option in
+                            Button(role: AgentModes.isDangerous(option.id) ? .destructive : nil) {
+                                Task { await model.setSessionMode(sessionKey, modeID: option.id) }
+                            } label: {
+                                if option.id == current.id {
+                                    Label(option.label, systemImage: "checkmark")
+                                } else {
+                                    Text(option.label)
+                                    Text(option.detail)
+                                }
+                            }
+                        }
+                    }
+                } label: {
+                    LCChip(fontSize: 11.5) {
+                        Text(current.label)
+                        Image(systemName: "chevron.up.chevron.down")
+                            .font(.system(size: 8, weight: .bold))
+                    }
+                }
+                .accessibilityIdentifier("session.modeChip")
+            } else {
+                LCChip(fontSize: 11.5) {
+                    Text(current.label)
+                }
+            }
+        }
     }
 
     /// 语音输入：点一下开始听写、再点结束。识别文本实时进草稿，发送仍由发送键决定

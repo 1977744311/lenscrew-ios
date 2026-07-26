@@ -167,8 +167,13 @@ final class CrewViewModel {
         links[key.hostID]?.turnMarkers[key.sessionID] ?? []
     }
 
-    func sessionMode(for key: SessionKey) -> SessionMode? {
-        links[key.hostID]?.sessionModes[key.sessionID]
+    /// 会话当前模式（含 label 的完整档位）；bridge 快照是权威，跨设备/重启都不丢
+    func sessionMode(for key: SessionKey) -> SessionModeOption? {
+        guard let session = sessionState(for: key)?.session,
+              let modeId = session.modeId
+        else { return nil }
+        return session.modes.first { $0.id == modeId }
+            ?? SessionModeOption(id: modeId, label: modeId, detail: "")
     }
 
     func hostName(for id: UUID) -> String {
@@ -401,14 +406,22 @@ final class CrewViewModel {
     // MARK: - 会话（按主机路由）
 
     func createSession(
-        agent: AgentKind, workspaceRoot: String, mode: SessionMode, on hostID: UUID
+        agent: AgentKind, workspaceRoot: String, modeID: String?, on hostID: UUID
     ) async {
         let sent = await run(on: hostID) {
-            try await $0.createSession(agent: agent, workspaceRoot: workspaceRoot, mode: mode)
+            try await $0.createSession(
+                agent: agent, workspaceRoot: workspaceRoot, modeID: modeID
+            )
         }
         if sent {
             hosts.remember(root: workspaceRoot)
-            links[hostID]?.notePendingMode(mode)
+        }
+    }
+
+    /// 会话中切换模式；成功与否都以 bridge 回推的 sessionUpdated 刷新 chip
+    func setSessionMode(_ key: SessionKey, modeID: String) async {
+        await run(on: key.hostID) {
+            try await $0.setSessionMode(key.sessionID, modeID: modeID)
         }
     }
 

@@ -62,13 +62,25 @@ test("fixture 切出三段会话", () => {
   assert.equal(sessions.length, 3);
 });
 
-test("init 给出原生会话 id、模型和运行态", () => {
+test("init 给出原生会话 id、模型、权限档和运行态", () => {
   const events = run(sessions[0] ?? []);
-  assert.deepEqual(events.slice(0, 3), [
+  assert.deepEqual(events.slice(0, 4), [
     { type: "nativeIdAssigned", nativeId: "aaaaaaaa-0000-4000-8000-000000000001" },
     { type: "modelResolved", model: "claude-fable-5" },
+    // 录制时 CLI 以 --permission-mode manual 启动，init 回显 "default"
+    { type: "modeResolved", modeId: "default" },
     { type: "status", status: "running" },
   ]);
+});
+
+test("set_permission_mode 后的 system/status 回显新档", () => {
+  const normalizer = new ClaudeNormalizer({ now: () => 1785000000000 });
+  const events = normalizer.normalize({
+    type: "system",
+    subtype: "status",
+    permissionMode: "acceptEdits",
+  } as ClaudeMessage);
+  assert.deepEqual(events, [{ type: "modeResolved", modeId: "acceptEdits" }]);
 });
 
 test("回放的用户消息只上屏一次，且不与工具结果混淆", () => {

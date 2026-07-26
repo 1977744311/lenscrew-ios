@@ -1,5 +1,9 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import type { AgentCapabilities, AgentKind } from "../../protocol/events.ts";
+import type {
+  AgentCapabilities,
+  AgentKind,
+  SessionModeOption,
+} from "../../protocol/events.ts";
 import type {
   AdapterEvent,
   AdapterEventSink,
@@ -55,6 +59,18 @@ const PRINT_CAPABILITIES: AgentCapabilities = {
   streamingDeltas: false,
 };
 
+/**
+ * 启动前的静态模式表（2026.07.23 实测录制的 session/new 自陈值）。
+ * acp 路径下 session/new 会重新自陈一遍（经 modesResolved 覆盖），
+ * 上游加档时运行时数据自动跟上，这份表只服务"会话建立前 UI 要展示什么"。
+ */
+const CURSOR_MODES: SessionModeOption[] = [
+  { id: "agent", label: "Agent · 全能力", detail: "读写与工具全开，需要审批的命令仍先问你" },
+  { id: "plan", label: "计划 · 只读", detail: "只读规划，先设计后动手" },
+  { id: "ask", label: "问答 · 不动手", detail: "只答问题，不编辑不执行" },
+];
+const CURSOR_DEFAULT_MODE = "agent";
+
 export interface CursorAdapterOptions {
   emit: AdapterEventSink;
   drive?: CursorDrive;
@@ -65,6 +81,7 @@ export interface CursorAdapterOptions {
 
 export class CursorAdapter implements AgentAdapter {
   readonly kind: AgentKind = "cursor";
+  readonly defaultModeId: string = CURSOR_DEFAULT_MODE;
 
   readonly #emit: AdapterEventSink;
   readonly #drive: CursorDrive;
@@ -72,6 +89,8 @@ export class CursorAdapter implements AgentAdapter {
   readonly #now: () => number;
 
   #capabilities: AgentCapabilities;
+  #modes: SessionModeOption[] = CURSOR_MODES;
+  #modeId: string = CURSOR_DEFAULT_MODE;
   #startOptions: AdapterStartOptions | null = null;
   #child: ChildProcess | null = null;
   #stdoutBuffer = "";
@@ -105,9 +124,18 @@ export class CursorAdapter implements AgentAdapter {
     return this.#capabilities;
   }
 
+  get modes(): SessionModeOption[] {
+    return this.#modes;
+  }
+
+  get currentModeId(): string {
+    return this.#modeId;
+  }
+
   async start(options: AdapterStartOptions): Promise<void> {
     this.#startOptions = options;
     this.#nativeId = options.resumeNativeId;
+    this.#modeId = this.#validateMode(options.modeId ?? CURSOR_DEFAULT_MODE);
     this.#emit({ type: "status", status: "starting" });
     if (this.#drive === "print") {
       // -p 是一轮一个进程，这里没有常驻进程可拉起
@@ -167,6 +195,29 @@ export class CursorAdapter implements AgentAdapter {
     });
   }
 
+  async setMode(modeId: string): Promise<void> {
+    const valid = this.#validateMode(modeId);
+    if (this.#drive === "print") {
+      // -p 一轮一进程：记住档位，下一轮 argv 生效；没有回显通道，这里自己发
+      this.#modeId = valid;
+      this.#emit({ type: "modeResolved", modeId: valid });
+      return;
+    }
+    const sessionId = this.#requireSessionId();
+    // [实测] 成功前 agent 先推 current_mode_update，normalizer 消费它发权威回显；
+    // 无效 modeId 的错误信息自带合法取值清单，原样透传即可
+    await this.#request("session/set_mode", { sessionId, modeId: valid });
+    this.#modeId = valid;
+  }
+
+  #validateMode(modeId: string): string {
+    if (!this.#modes.some((mode) => mode.id === modeId)) {
+      const valid = this.#modes.map((mode) => mode.id).join(", ");
+      throw new Error(`未知的 cursor 模式 ${modeId}（可用：${valid}）`);
+    }
+    return modeId;
+  }
+
   async close(): Promise<void> {
     this.#closing = true;
     const child = this.#child;
@@ -219,8 +270,8 @@ export class CursorAdapter implements AgentAdapter {
     }
 
     const sessionId = this.#requireSessionId();
-    if (options.mode === "plan") {
-      await this.#request("session/set_mode", { sessionId, modeId: "plan" });
+    if (this.#modeId !== CURSOR_DEFAULT_MODE) {
+      await this.#request("session/set_mode", { sessionId, modeId: this.#modeId });
     }
     if (options.model !== null) {
       // [实测] cursor 要的键是 configId，ACP schema 里写的是 optionId；以实测为准
@@ -307,7 +358,10 @@ export class CursorAdapter implements AgentAdapter {
   #startPrintTurn(options: AdapterStartOptions, text: string): void {
     const args = ["-p", "--output-format", "stream-json"];
     if (options.model !== null) args.push("--model", options.model);
-    if (options.mode === "plan") args.push("--mode", "plan");
+    // -p 的 --mode 只认 plan/ask，agent 档就是不带 flag 的缺省行为
+    if (this.#modeId === "plan" || this.#modeId === "ask") {
+      args.push("--mode", this.#modeId);
+    }
     if (this.#nativeId !== null) args.push("--resume", this.#nativeId);
     args.push(text);
     this.#spawn(args, options.workspaceRoot, (line) => this.#onPrintLine(line));
@@ -397,6 +451,9 @@ export class CursorAdapter implements AgentAdapter {
     for (const event of events) {
       // -p 路径的原生会话 id 只在每轮 init 里露一次，续接下一轮要靠它
       if (event.type === "nativeIdAssigned") this.#nativeId = event.nativeId;
+      // 运行时自陈/回显的模式同步进 adapter 本地状态，setMode 校验用最新表
+      if (event.type === "modesResolved") this.#modes = event.modes;
+      if (event.type === "modeResolved") this.#modeId = event.modeId;
       this.#emit(event);
     }
   }

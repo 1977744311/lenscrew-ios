@@ -6,6 +6,7 @@ import type {
   TurnStopReason,
 } from "../../protocol/events.ts";
 import type { AdapterEvent, ProtocolNormalizer } from "../types.ts";
+import { claudeModeIdFromNative } from "./protocol.ts";
 import type {
   ClaudeAssistantMessage,
   ClaudeCanUseToolRequest,
@@ -16,6 +17,7 @@ import type {
   ClaudeStreamEvent,
   ClaudeSystemApiRetry,
   ClaudeSystemInit,
+  ClaudeSystemStatus,
   ClaudeToolResultBlock,
   ClaudeToolUseBlock,
   ClaudeUserMessage,
@@ -70,7 +72,9 @@ export class ClaudeNormalizer implements ProtocolNormalizer<ClaudeMessage> {
   normalize(message: ClaudeMessage): AdapterEvent[] {
     switch (message.type) {
       case "system":
-        return this.onSystem(message as ClaudeSystemInit | ClaudeSystemApiRetry);
+        return this.onSystem(
+          message as ClaudeSystemInit | ClaudeSystemApiRetry | ClaudeSystemStatus,
+        );
       case "assistant":
         return this.onAssistant(message as ClaudeAssistantMessage);
       case "user":
@@ -88,7 +92,9 @@ export class ClaudeNormalizer implements ProtocolNormalizer<ClaudeMessage> {
 
   // MARK: - system
 
-  private onSystem(message: ClaudeSystemInit | ClaudeSystemApiRetry): AdapterEvent[] {
+  private onSystem(
+    message: ClaudeSystemInit | ClaudeSystemApiRetry | ClaudeSystemStatus,
+  ): AdapterEvent[] {
     if (message.subtype === "init") {
       const init = message as ClaudeSystemInit;
       this.cwd = init.cwd ?? null;
@@ -98,6 +104,12 @@ export class ClaudeNormalizer implements ProtocolNormalizer<ClaudeMessage> {
       }
       if (init.model) {
         events.push({ type: "modelResolved", model: init.model });
+      }
+      if (init.permissionMode) {
+        events.push({
+          type: "modeResolved",
+          modeId: claudeModeIdFromNative(init.permissionMode),
+        });
       }
       // 不发 titleResolved：init 及后续所有帧都不带会话标题，CLI 的标题生成
       // 是另一条要主动发起的控制请求（会额外烧一次模型调用），拿不到就按契约不发
@@ -118,7 +130,21 @@ export class ClaudeNormalizer implements ProtocolNormalizer<ClaudeMessage> {
       ];
     }
 
-    // status / thinking_tokens / task_* / background_tasks_changed 等纯进度信号，不入流水
+    // set_permission_mode 成功后 CLI 推 system/status 回显新档——模式切换的权威确认
+    if (message.subtype === "status") {
+      const status = message as ClaudeSystemStatus;
+      if (status.permissionMode) {
+        return [
+          {
+            type: "modeResolved",
+            modeId: claudeModeIdFromNative(status.permissionMode),
+          },
+        ];
+      }
+      return [];
+    }
+
+    // thinking_tokens / task_* / background_tasks_changed 等纯进度信号，不入流水
     return [];
   }
 

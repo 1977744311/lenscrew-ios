@@ -39,6 +39,19 @@ export type SessionStatus =
   | "error"
   | "ended";
 
+/**
+ * 会话模式的一个档位。id 属于各 adapter 自己的命名空间
+ * （codex: plan/default/auto/full，claude: plan/default/acceptEdits/bypass，
+ * cursor: agent/plan/ask），客户端只展示、不解释——语义差异是各运行时
+ * 真实存在的，硬拉齐三家反而是在撒谎。
+ */
+export interface SessionModeOption {
+  id: string;
+  label: string;
+  /** 一句话说明这一档批什么、放什么（选择器副文本） */
+  detail: string;
+}
+
 export interface AgentSession {
   /** bridge 分配，跨重连稳定 */
   id: string;
@@ -50,6 +63,14 @@ export interface AgentSession {
   model: string | null;
   status: SessionStatus;
   capabilities: AgentCapabilities;
+  /**
+   * 当前审批/协作模式。初值由 adapter 给出，之后跟随运行时回显
+   * （claude 的 system/status、cursor 的 current_mode_update）；
+   * 运行时没有模式概念时为 null。
+   */
+  modeId: string | null;
+  /** 本会话可切换的模式清单；空数组表示不支持切换 */
+  modes: SessionModeOption[];
   createdAtMs: number;
   updatedAtMs: number;
 }
@@ -299,8 +320,6 @@ export type BridgeEvent =
 
 // MARK: - 客户端 → bridge
 
-export type SessionMode = "default" | "plan";
-
 export type ClientCommand =
   | { type: "listSessions" }
   | {
@@ -308,7 +327,8 @@ export type ClientCommand =
       agent: AgentKind;
       workspaceRoot: string;
       model: string | null;
-      mode: SessionMode;
+      /** 见 SessionModeOption.id；null 用 adapter 的缺省档 */
+      modeId: string | null;
     }
   | {
       type: "resumeSession";
@@ -324,5 +344,7 @@ export type ClientCommand =
       approvalId: string;
       optionId: string;
     }
+  /** 会话中切换模式；codex 下一轮 turn 生效，claude/cursor 即时生效 */
+  | { type: "setSessionMode"; sessionId: string; modeId: string }
   | { type: "closeSession"; sessionId: string }
   | { type: "subscribe"; sessionId: string; fromSeq: number };

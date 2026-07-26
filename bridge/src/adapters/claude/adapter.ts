@@ -1,7 +1,11 @@
 import { spawn } from "node:child_process";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 
-import type { AgentCapabilities, AgentKind } from "../../protocol/events.ts";
+import type {
+  AgentCapabilities,
+  AgentKind,
+  SessionModeOption,
+} from "../../protocol/events.ts";
 import type { AdapterEventSink, AdapterStartOptions, AgentAdapter } from "../types.ts";
 import { ClaudeNormalizer } from "./normalizer.ts";
 import type {
@@ -35,6 +39,33 @@ const PRE_TOOL_USE_CALLBACK_ID = "lenscrew_pre_tool_use";
 
 const CONTROL_TIMEOUT_MS = 15_000;
 const CLOSE_GRACE_MS = 3_000;
+
+/**
+ * 四档模式，档位 id 是我们的、值映射到 CLI 的 --permission-mode
+ * （2.1.215 还有 auto/dontAsk 两档，与 acceptEdits 语义相近，不全暴露）。
+ * 注意 CLI 会把 "manual" 回显成 "default"，映射两边都要认（见 normalizer）。
+ */
+const CLAUDE_MODES: SessionModeOption[] = [
+  { id: "plan", label: "计划 · 只读", detail: "先出计划不动手，退出计划需确认" },
+  { id: "default", label: "默认 · 每步审批", detail: "每个工具调用先问过你再执行" },
+  { id: "acceptEdits", label: "自动接受编辑", detail: "文件编辑直接放行，命令仍要审批" },
+  { id: "bypass", label: "完全放行", detail: "跳过一切权限检查——只给完全信任的仓库" },
+];
+const CLAUDE_DEFAULT_MODE = "default";
+
+/** 档位 id → CLI 的 permission mode 取值（回显方向的映射在 protocol.ts） */
+function claudeNativeMode(modeId: string): string {
+  switch (modeId) {
+    case "plan":
+      return "plan";
+    case "acceptEdits":
+      return "acceptEdits";
+    case "bypass":
+      return "bypassPermissions";
+    default:
+      return "manual";
+  }
+}
 
 interface PendingControl {
   resolve: (value: unknown) => void;
@@ -81,6 +112,8 @@ export class ClaudeAdapter implements AgentAdapter {
     resume: true,
     streamingDeltas: true,
   };
+  readonly modes: SessionModeOption[] = CLAUDE_MODES;
+  readonly defaultModeId: string = CLAUDE_DEFAULT_MODE;
 
   private readonly emit: AdapterEventSink;
   private readonly normalizer: ClaudeNormalizer;
@@ -89,6 +122,7 @@ export class ClaudeAdapter implements AgentAdapter {
   private child: ChildProcessWithoutNullStreams | null = null;
   private stdoutBuffer = "";
   private requestSeq = 0;
+  private modeId: string = CLAUDE_DEFAULT_MODE;
   private readonly pendingControl = new Map<string, PendingControl>();
   private readonly pendingApprovals = new Map<string, PendingApproval>();
   private closing = false;
@@ -97,6 +131,10 @@ export class ClaudeAdapter implements AgentAdapter {
     this.emit = emit;
     this.executable = executable;
     this.normalizer = new ClaudeNormalizer();
+  }
+
+  get currentModeId(): string {
+    return this.modeId;
   }
 
   // MARK: - 生命周期
@@ -155,6 +193,7 @@ export class ClaudeAdapter implements AgentAdapter {
   }
 
   private buildArgs(options: AdapterStartOptions): string[] {
+    this.modeId = this.validateMode(options.modeId ?? CLAUDE_DEFAULT_MODE);
     const args = [
       "-p",
       "--input-format",
@@ -169,11 +208,34 @@ export class ClaudeAdapter implements AgentAdapter {
       "--permission-prompt-tool",
       PERMISSION_PROMPT_TOOL,
       "--permission-mode",
-      options.mode === "plan" ? "plan" : "manual",
+      claudeNativeMode(this.modeId),
     ];
     if (options.model) args.push("--model", options.model);
     if (options.resumeNativeId) args.push("--resume", options.resumeNativeId);
     return args;
+  }
+
+  /**
+   * 运行中切换：control_request{set_permission_mode}。
+   * 实测（2.1.215）成功回 {mode}，且 CLI 随后推一条
+   * system/status {permissionMode} —— normalizer 消费它发 modeResolved，
+   * 所以这里不自己发回显，避免重复广播。
+   */
+  async setMode(modeId: string): Promise<void> {
+    const valid = this.validateMode(modeId);
+    await this.sendControlRequest({
+      subtype: "set_permission_mode",
+      mode: claudeNativeMode(valid),
+    });
+    this.modeId = valid;
+  }
+
+  private validateMode(modeId: string): string {
+    if (!CLAUDE_MODES.some((mode) => mode.id === modeId)) {
+      const valid = CLAUDE_MODES.map((mode) => mode.id).join(", ");
+      throw new Error(`未知的 claude 模式 ${modeId}（可用：${valid}）`);
+    }
+    return modeId;
   }
 
   async sendMessage(text: string): Promise<void> {

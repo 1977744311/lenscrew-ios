@@ -35,6 +35,22 @@ public enum SessionStatus: String, Sendable, Codable {
     case starting, idle, running, awaitingApproval, error, ended
 }
 
+/// 会话模式的一个档位。id 属于各 adapter 自己的命名空间
+/// （codex: plan/default/auto/full，claude: plan/default/acceptEdits/bypass，
+/// cursor: agent/plan/ask），客户端只展示、不解释。
+public struct SessionModeOption: Sendable, Equatable, Codable, Identifiable {
+    public var id: String
+    public var label: String
+    /// 一句话说明这一档批什么、放什么（选择器副文本）
+    public var detail: String
+
+    public init(id: String, label: String, detail: String) {
+        self.id = id
+        self.label = label
+        self.detail = detail
+    }
+}
+
 public struct AgentSession: Sendable, Equatable, Codable, Identifiable {
     public var id: String
     public var agent: AgentKind
@@ -45,13 +61,18 @@ public struct AgentSession: Sendable, Equatable, Codable, Identifiable {
     public var model: String?
     public var status: SessionStatus
     public var capabilities: AgentCapabilities
+    /// 当前审批/协作模式；运行时没有模式概念时为 nil
+    public var modeId: String?
+    /// 本会话可切换的模式清单；空数组表示不支持切换
+    public var modes: [SessionModeOption]
     public var createdAtMs: Int64
     public var updatedAtMs: Int64
 
     public init(
         id: String, agent: AgentKind, nativeId: String?, workspaceRoot: String,
         title: String, model: String?, status: SessionStatus,
-        capabilities: AgentCapabilities, createdAtMs: Int64, updatedAtMs: Int64
+        capabilities: AgentCapabilities, modeId: String?, modes: [SessionModeOption],
+        createdAtMs: Int64, updatedAtMs: Int64
     ) {
         self.id = id
         self.agent = agent
@@ -61,6 +82,8 @@ public struct AgentSession: Sendable, Equatable, Codable, Identifiable {
         self.model = model
         self.status = status
         self.capabilities = capabilities
+        self.modeId = modeId
+        self.modes = modes
         self.createdAtMs = createdAtMs
         self.updatedAtMs = updatedAtMs
     }
@@ -77,6 +100,8 @@ public struct AgentSession: Sendable, Equatable, Codable, Identifiable {
         try container.encode(model, forKey: .model)
         try container.encode(status, forKey: .status)
         try container.encode(capabilities, forKey: .capabilities)
+        try container.encode(modeId, forKey: .modeId)
+        try container.encode(modes, forKey: .modes)
         try container.encode(createdAtMs, forKey: .createdAtMs)
         try container.encode(updatedAtMs, forKey: .updatedAtMs)
     }

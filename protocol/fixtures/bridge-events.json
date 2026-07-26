@@ -18,6 +18,8 @@
         "resume": false,
         "streamingDeltas": false
       },
+      "modeId": null,
+      "modes": [],
       "createdAtMs": 1784985600000,
       "updatedAtMs": 1784985600000
     }
@@ -41,6 +43,19 @@
         "resume": true,
         "streamingDeltas": true
       },
+      "modeId": "auto",
+      "modes": [
+        {
+          "id": "default",
+          "label": "默认 · 每步审批",
+          "detail": "每条命令先问过你再执行"
+        },
+        {
+          "id": "auto",
+          "label": "自动 · 按需审批",
+          "detail": "工作区内自动干活，越界操作才来问"
+        }
+      ],
       "createdAtMs": 1784985600000,
       "updatedAtMs": 1784985600500
     }

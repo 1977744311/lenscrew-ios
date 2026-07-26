@@ -125,6 +125,36 @@ struct ContractFixtureTests {
         #expect(decoded == command)
     }
 
+    @Test("创建与切换模式指令的线上格式")
+    func encodesModeCommands() throws {
+        let encoder = JSONEncoder()
+        // createSession 的 modeId 是 `string | null`，键必须始终存在
+        let create = ClientCommand.createSession(
+            agent: .codex, workspaceRoot: "/tmp/ws", model: nil, modeID: "auto"
+        )
+        let createObject = try #require(
+            JSONSerialization.jsonObject(with: try encoder.encode(create)) as? [String: Any]
+        )
+        #expect(createObject["type"] as? String == "createSession")
+        #expect(createObject["modeId"] as? String == "auto")
+        #expect(createObject["model"] is NSNull)
+
+        let setMode = ClientCommand.setSessionMode(sessionID: "s-001", modeID: "full")
+        let setObject = try #require(
+            JSONSerialization.jsonObject(with: try encoder.encode(setMode)) as? [String: Any]
+        )
+        #expect(setObject["type"] as? String == "setSessionMode")
+        #expect(setObject["sessionId"] as? String == "s-001")
+        #expect(setObject["modeId"] as? String == "full")
+
+        for command in [create, setMode] {
+            let decoded = try JSONDecoder().decode(
+                ClientCommand.self, from: try encoder.encode(command)
+            )
+            #expect(decoded == command)
+        }
+    }
+
     @Test("增量补丁按 kind 各取所需，不匹配的字段忽略")
     func appliesPatchesPerKind() {
         let message = TranscriptBlock.agentMessage(id: "b", text: "你好", streaming: true)
