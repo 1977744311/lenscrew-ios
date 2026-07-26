@@ -293,7 +293,7 @@ extension BridgeEvent {
     fileprivate enum Discriminator: Equatable {
         case sessionCreated, sessionUpdated, sessionStatus, sessionClosed
         case blockAppended, blockUpdated, approvalRequested, approvalSettled
-        case turnCompleted, bridgeError
+        case turnCompleted, bridgeError, quotaUpdated
     }
 
     fileprivate var type: Discriminator {
@@ -308,6 +308,7 @@ extension BridgeEvent {
         case .approvalSettled: return .approvalSettled
         case .turnCompleted: return .turnCompleted
         case .bridgeError: return .bridgeError
+        case .quotaUpdated: return .quotaUpdated
         }
     }
 }
