@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createHash, randomBytes } from "node:crypto";
-import { chmodSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { request as httpRequest } from "node:http";
 import { hostname, networkInterfaces } from "node:os";
 import { join } from "node:path";
@@ -21,6 +21,7 @@ import {
 } from "../src/push/apnsClient.ts";
 import { createPushDispatcher, type PushTokenRegistry } from "../src/push/pushDispatcher.ts";
 import { renderPairingQr } from "../src/qr/index.ts";
+import { installService, serviceStatus, uninstallService } from "../src/service/launchd.ts";
 import type { BridgeEvent } from "../src/protocol/events.ts";
 import {
   loadOrCreateIdentity,
@@ -91,6 +92,9 @@ function printHelp(): void {
       "用法: lenscrew up [选项]        启动 bridge",
       "      lenscrew qr [选项]        重开配对窗口并打印二维码",
       "      lenscrew relay [选项]     启动自架中继服务器",
+      "      lenscrew service install [up 选项]   装成 launchd 常驻(开机自启/崩溃拉起)",
+      "      lenscrew service uninstall           停止并卸载常驻",
+      "      lenscrew service status              查看常驻状态",
       "",
       "up 选项:",
       "  --host <地址>      监听地址,默认 127.0.0.1。手机走局域网直连需传局域网地址或 0.0.0.0",
@@ -482,6 +486,37 @@ async function runQr(argv: string[]): Promise<void> {
   printPairingQr(pairPayload);
 }
 
+async function runService(argv: string[]): Promise<void> {
+  const action = argv[0];
+  const log = (line: string): void => {
+    process.stdout.write(`  ${line}\n`);
+  };
+  if (action === "install") {
+    // 复用 up 的解析:token 未指定时在这里随机生成一次,固定进 plist——
+    // 常驻模式下 bridge 每次拉起口令必须不变,手机才不用重配。
+    const options = parseUpArguments(argv.slice(1));
+    await installService({
+      options,
+      entryPath: realpathSync(process.argv[1] ?? ""),
+      stateDir: resolveStateDir(
+        options.stateDir !== null ? { [STATE_DIR_ENV]: options.stateDir } : process.env,
+      ),
+      log,
+    });
+    return;
+  }
+  if (action === "uninstall") {
+    await uninstallService(log);
+    return;
+  }
+  if (action === "status") {
+    await serviceStatus(log);
+    return;
+  }
+  printHelp();
+  process.exit(action === undefined ? 0 : 1);
+}
+
 async function main(): Promise<void> {
   const argv = process.argv.slice(2);
   if (argv[0] === "relay") {
@@ -490,6 +525,10 @@ async function main(): Promise<void> {
   }
   if (argv[0] === "qr") {
     await runQr(argv.slice(1));
+    return;
+  }
+  if (argv[0] === "service") {
+    await runService(argv.slice(1));
     return;
   }
   const command = argv[0] === "up" ? argv.slice(1) : argv;
