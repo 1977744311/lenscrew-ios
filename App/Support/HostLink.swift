@@ -1,5 +1,6 @@
 import AgentProtocol
 import BridgeLink
+import Combine
 import Foundation
 import GlassRenderer
 import GlassesKit
@@ -18,28 +19,27 @@ struct SessionKey: Hashable, Sendable {
 /// 多台主机各持一个、互不干扰——某台断线/失败只体现在它自己的 linkState 上。
 /// 连接逻辑从单连接时代的 CrewViewModel 原样搬来；VM 只负责聚合与路由。
 @MainActor
-@Observable
-final class HostLink: Identifiable {
+final class HostLink: ObservableObject, Identifiable {
     let hostID: UUID
 
-    private(set) var linkState: BridgeLinkState = .disconnected
-    private(set) var sessions: [SessionState] = []
-    private(set) var glassScreen: GlassScreen = .sessionList
+    @Published private(set) var linkState: BridgeLinkState = .disconnected
+    @Published private(set) var sessions: [SessionState] = []
+    @Published private(set) var glassScreen: GlassScreen = .sessionList
     /// /health 往返毫秒数；每台直连主机各测各的，连不上为 nil
-    private(set) var latencyMs: Int?
+    @Published private(set) var latencyMs: Int?
     /// paired 主机实际走的链路（直连/中继）；manual 主机或未连接为 nil
-    private(set) var linkPath: HostLinkPath?
+    @Published private(set) var linkPath: HostLinkPath?
     /// sessionID → 轮次分隔线（按到达顺序）；键在本主机命名空间内，不会撞号
-    private(set) var turnMarkers: [String: [TurnMarker]] = [:]
+    @Published private(set) var turnMarkers: [String: [TurnMarker]] = [:]
     /// 本主机的账号级额度，按 agent 各留最新一份（目前只有 codex 有通道）。
     /// bridge 在接入时会补发缓存快照，断线重连后立即恢复，无需本地持久化
-    private(set) var quota: [AgentKind: AgentQuotaSnapshot] = [:]
+    @Published private(set) var quota: [AgentKind: AgentQuotaSnapshot] = [:]
     /// 旁路侧信道回主线程发布次数（应 ≪ sideChannelEventsSeen；测试/对照用）
-    private(set) var sideChannelMainActorHops = 0
+    @Published private(set) var sideChannelMainActorHops = 0
     /// 旁路见过的 raw 事件数（含不发布的 delta）
-    private(set) var sideChannelEventsSeen = 0
+    @Published private(set) var sideChannelEventsSeen = 0
     /// VM 按 hostID 路由动作时直接取用；断开为 nil
-    private(set) var coordinator: CrewCoordinator?
+    @Published private(set) var coordinator: CrewCoordinator?
 
     private let store: HostStore
     /// UI 测试夹具注入的内存连接；非 nil 时 connect() 直接用它，跳过真实网络

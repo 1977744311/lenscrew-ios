@@ -6,7 +6,7 @@ import SwiftUI
 /// 没有的档不显示），层级与手机 ApprovalSheet 一致；persistent 影响面太大，刻意不上腕。
 /// 裁决后不乐观撤卡：等 iPhone 的下一份快照把该审批从队列里拿掉，队列空了自动退回。
 struct WatchApprovalView: View {
-    let link: WatchLink
+    @ObservedObject var link: WatchLink
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -18,7 +18,7 @@ struct WatchApprovalView: View {
             }
         }
         .navigationTitle("审批")
-        .onChange(of: link.snapshot.approvals.isEmpty) { _, empty in
+        .onChange(of: link.snapshot.approvals.isEmpty) { empty in
             if empty { dismiss() }
         }
     }

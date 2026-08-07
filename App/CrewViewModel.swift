@@ -1,5 +1,6 @@
 import AgentProtocol
 import BridgeLink
+import Combine
 import Foundation
 import GlassRenderer
 import GlassesKit
@@ -71,29 +72,31 @@ struct PendingApprovalItem: Identifiable, Sendable {
 /// 快照），本类只做聚合（会话列表/审批队列）、按 (hostID, sessionID) 路由动作、
 /// 管理眼镜聚焦与偏好。单主机时退化成从前的单连接行为。
 @MainActor
-@Observable
-final class CrewViewModel {
+final class CrewViewModel: ObservableObject {
     let hosts: HostStore
 
     /// 每台已配置主机一条连接单元；key = 主机 UUID
-    private(set) var links: [UUID: HostLink] = [:]
+    @Published private(set) var links: [UUID: HostLink] = [:]
     /// 驱动真实眼镜的主机。默认 = active 主机；点进某会话时跟随到它所属的主机
-    private(set) var focusedHostID: UUID?
-    private(set) var glassesState: GlassesSessionState = .idle
-    private(set) var displayState: GlassesKit.DisplayState = .stopped
-    private(set) var lastError: String?
+    @Published private(set) var focusedHostID: UUID?
+    @Published private(set) var glassesState: GlassesSessionState = .idle
+    @Published private(set) var displayState: GlassesKit.DisplayState = .stopped
+    @Published private(set) var lastError: String?
     /// 通知深链的目的地；RootView 观察它完成导航后清掉
-    private(set) var pendingSessionRoute: SessionKey?
+    @Published private(set) var pendingSessionRoute: SessionKey?
 
     // 偏好：落 UserDefaults，键名见 PrefKeys
-    private(set) var autoPresentApprovals: Bool
-    private(set) var notifyOnApproval: Bool
-    private(set) var notifyOnTurnCompleted: Bool
+    @Published private(set) var autoPresentApprovals: Bool
+    @Published private(set) var notifyOnApproval: Bool
+    @Published private(set) var notifyOnTurnCompleted: Bool
 
     /// 唯一的真实眼镜会话（真机或 Mock），只有聚焦主机的网关会把渲染送进来
     private let glasses = GlassesRuntime.makeSession()
     /// APNs device token（hex），注册回调到达后缓存，各主机连接建立/开关变化时重发
     private var apnsTokenHex: String?
+    /// 转发 HostStore / 各 HostLink 的变更，让聚合投影驱动 SwiftUI
+    private var cancellables = Set<AnyCancellable>()
+    private var linkCancellables: [UUID: AnyCancellable] = [:]
 
     var usingMockGlasses: Bool { GlassesRuntime.isMock }
     var glassesMounted: Bool { displayState == .started }
@@ -196,6 +199,9 @@ final class CrewViewModel {
         notifyOnApproval = defaults.object(forKey: PrefKeys.notifyApproval) as? Bool ?? true
         notifyOnTurnCompleted =
             defaults.object(forKey: PrefKeys.notifyTurnCompleted) as? Bool ?? true
+        hosts.objectWillChange
+            .sink { [weak self] _ in self?.objectWillChange.send() }
+            .store(in: &cancellables)
         observeGlasses()
     }
 
@@ -247,7 +253,15 @@ final class CrewViewModel {
             }
         )
         links[id] = link
+        bindLink(link)
         return link
+    }
+
+    /// HostLink 自身变更（会话/连接态）要冒泡到 VM，聚合列表与 Watch 快照才能刷新
+    private func bindLink(_ link: HostLink) {
+        linkCancellables[link.hostID] = link.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }
     }
 
     /// 多台主机并存时连接错误要能归属到主机；单台时保持原文案
@@ -273,6 +287,7 @@ final class CrewViewModel {
     /// 删的是聚焦/active 主机就落到下一台（有的话）并确保它在线。
     func removeHost(_ id: UUID) async {
         if let link = links.removeValue(forKey: id) {
+            linkCancellables.removeValue(forKey: id)
             await link.shutdown()
         }
         hosts.remove(id)

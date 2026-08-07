@@ -16,8 +16,9 @@ struct ApprovalPresentation: Identifiable {
 /// persistent 选项刻意弱化成底部小字行。裁决后不乐观撤卡——
 /// 等 approvalSettled 让 pendingApprovals 变空，由会话页把 sheet 收掉。
 struct ApprovalSheet: View {
-    let model: CrewViewModel
+    @ObservedObject var model: CrewViewModel
     let presentation: ApprovalPresentation
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var submittedOptionID: String?
 
     private var approval: ApprovalRequest { presentation.approval }
@@ -37,10 +38,11 @@ struct ApprovalSheet: View {
         .padding(.horizontal, 20)
         .padding(.top, 18)
         .padding(.bottom, 12)
+        .frame(maxWidth: sizeClass == .regular ? 560 : .infinity)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
-        .presentationBackground(Color(hex: 0x161618))
+        .lcPresentationBackground(Color(hex: 0x161618))
         .interactiveDismissDisabled(submittedOptionID != nil)
     }
 

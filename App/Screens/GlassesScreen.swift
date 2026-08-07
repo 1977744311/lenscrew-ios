@@ -7,11 +7,15 @@ import SwiftUI
 /// 屏 5 · 眼镜：设备状态 + 眼镜画面实时预览（手机是眼镜的取景器）+ 自动亮屏开关。
 /// 画面与快照都取聚焦主机的——真实眼镜此刻就归它驱动。
 struct GlassesScreen: View {
-    let model: CrewViewModel
+    @ObservedObject var model: CrewViewModel
+    /// Compact 底栏占位；iPad 顶栏布局关掉
+    var showsDockClearance: Bool = true
 
     private var preview: GlassPreview.Output {
         GlassPreview.compose(screen: model.glassScreen, sessions: model.focusedSessions)
     }
+
+    private var isPad: Bool { UIDevice.current.userInterfaceIdiom == .pad }
 
     var body: some View {
         ScrollView {
@@ -22,14 +26,25 @@ struct GlassesScreen: View {
                     .padding(.horizontal, 4)
 
                 deviceCard
+                if isPad {
+                    Text("iPad 上可挂载眼镜；Apple Watch 中转仅 iPhone。")
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(LC.text3)
+                        .padding(.horizontal, 4)
+                }
                 previewSection
                 autoPresentCard
             }
             .padding(.horizontal, 16)
             .padding(.top, 4)
+            .lcReadableWidth()
         }
         .background(LC.bg)
-        .contentMargins(.bottom, 100, for: .scrollContent)
+        .safeAreaInset(edge: .bottom) {
+            if showsDockClearance {
+                Color.clear.frame(height: 100)
+            }
+        }
     }
 
     // MARK: - 设备状态

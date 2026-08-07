@@ -1,6 +1,6 @@
 import AgentProtocol
+import Combine
 import Foundation
-import Observation
 import WatchConnectivity
 
 /// iPhone 侧的手表中转。手表不直连 bridge/relay、不持任何密钥，本类是唯一通路：
@@ -21,6 +21,8 @@ final class WatchBridge: NSObject {
     private var lastComplicationFingerprint: String?
     private var lastComplicationAt: Date = .distantPast
     private static let complicationMinInterval: TimeInterval = 15 * 60
+    /// Combine 订阅：VM 变更 → 轻 debounce 后重建快照
+    private var observation: AnyCancellable?
 
     private override init() {
         super.init()
@@ -37,22 +39,19 @@ final class WatchBridge: NSObject {
 
     // MARK: - 出向：快照
 
-    /// 读一次快照并注册观察。@Observable 的 onChange 是 willSet 时刻的一次性回调，
-    /// 回到 MainActor 下一拍重读新值、重新挂钩；pushIfChanged 去重，抖动不放大。
+    /// 订阅 CrewViewModel.objectWillChange：轻 debounce 后重读聚合态并推送；
+    /// pushIfChanged 去重，抖动不放大。
     private func observeAndPush() {
         guard let model else { return }
-        let snapshot = withObservationTracking {
-            Self.buildSnapshot(
-                approvals: model.pendingApprovalItems, sessions: model.aggregatedSessions,
-                quotas: model.hostQuotas, connectedHosts: model.connectedHostCount
-            )
-        } onChange: { [weak self] in
-            Task { @MainActor [weak self] in self?.observeAndPush() }
-        }
-        pushIfChanged(snapshot)
+        observation = model.objectWillChange
+            .debounce(for: .milliseconds(50), scheduler: RunLoop.main)
+            .sink { [weak self] _ in
+                self?.repushCurrent()
+            }
+        repushCurrent()
     }
 
-    /// 激活完成/换表等时机的重推：只把当前状态再送一遍，不重复注册观察
+    /// 激活完成/换表等时机的重推：只把当前状态再送一遍
     private func repushCurrent() {
         guard let model else { return }
         pushIfChanged(

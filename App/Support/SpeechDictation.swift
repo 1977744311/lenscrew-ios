@@ -1,4 +1,5 @@
 import AVFoundation
+import Combine
 import Foundation
 import Speech
 
@@ -6,13 +7,12 @@ import Speech
 /// 点一下开始、再点结束——发送与否仍由发送键决定，语音只负责把话变成字。
 /// 识别语言跟随系统 Locale；权限在第一次点击时才请求，不在启动期打扰。
 @MainActor
-@Observable
-final class SpeechDictation {
-    private(set) var isListening = false
+final class SpeechDictation: ObservableObject {
+    @Published private(set) var isListening = false
     /// 本次听写的累计识别文本。partial 结果是全量替换式，
     /// 消费方应以"起点快照 + transcript"拼草稿，而不是逐段追加。
-    private(set) var transcript = ""
-    private(set) var lastError: String?
+    @Published private(set) var transcript = ""
+    @Published private(set) var lastError: String?
 
     private let engine = AVAudioEngine()
     private var request: SFSpeechAudioBufferRecognitionRequest?
@@ -35,7 +35,7 @@ final class SpeechDictation {
         deactivateAudioSession()
     }
 
-    /// 立即作废本次听写（发送、离开页面）：不再产出任何文本
+    /// 立刻作废本次听写（发送、离开页面）：不再产出任何文本
     func cancel() {
         guard isListening || task != nil else { return }
         isListening = false
@@ -58,7 +58,13 @@ final class SpeechDictation {
             lastError = "没有语音识别权限，去 设置 › LensCrew 打开"
             return
         }
-        guard await AVAudioApplication.requestRecordPermission() else {
+        // iOS 16：AVAudioSession.requestRecordPermission；iOS 17+ 的 AVAudioApplication 不用
+        let micGranted = await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            AVAudioSession.sharedInstance().requestRecordPermission { granted in
+                continuation.resume(returning: granted)
+            }
+        }
+        guard micGranted else {
             lastError = "没有麦克风权限，去 设置 › LensCrew 打开"
             return
         }

@@ -1,4 +1,5 @@
 import BridgeLink
+import Combine
 import Foundation
 import Security
 import SwiftUI
@@ -112,12 +113,11 @@ struct KeychainSecretStore: HostSecretStoring {
 /// （service 不变，account = 主机 UUID），保持 WhenUnlockedThisDeviceOnly：
 /// 不进 iCloud 备份、不迁移到新设备。
 @MainActor
-@Observable
-final class HostStore {
-    private(set) var hosts: [BridgeHostConfig] = []
-    private(set) var activeHostID: UUID?
+final class HostStore: ObservableObject {
+    @Published private(set) var hosts: [BridgeHostConfig] = []
+    @Published private(set) var activeHostID: UUID?
     /// 工作目录 MRU 是跨主机共享的：手机上全靠手打，能少输一次是一次
-    private(set) var workspaceRoots: [String] = []
+    @Published private(set) var workspaceRoots: [String] = []
 
     var active: BridgeHostConfig? {
         hosts.first { $0.id == activeHostID }

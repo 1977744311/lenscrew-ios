@@ -5,7 +5,7 @@ import SwiftUI
 /// 扫码配对：相机扫 Mac 上 lenscrew qr 出的二维码 → 确认卡 → qr_bootstrap 握手入库。
 /// 相机不可用（模拟器没硬件 / 权限被拒）自动换手动粘贴，走同一条解析确认流程。
 struct PairingScanView: View {
-    let model: CrewViewModel
+    @ObservedObject var model: CrewViewModel
     /// 配对成功回调：由 AddComputerSheet 把整条 sheet 链收掉、回设置页
     let onPaired: () -> Void
     @Environment(\.dismiss) private var dismiss
@@ -74,12 +74,15 @@ struct PairingScanView: View {
             VStack(spacing: 10) {
                 QRCameraView { handle(code: $0) }
                     .frame(maxWidth: .infinity)
-                    .frame(height: 360)
+                    .frame(minHeight: 220)
+                    .aspectRatio(4.0 / 3.0, contentMode: .fit)
+                    .frame(maxHeight: 520)
                     .clipShape(RoundedRectangle(cornerRadius: 20))
                 Text("在 Mac 上运行 lenscrew qr，把二维码对进取景框。")
                     .font(.system(size: 12))
                     .foregroundStyle(LC.text3)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         } else {
             VStack(alignment: .leading, spacing: 10) {
                 Text("相机不可用（模拟器或权限被拒）。把 Mac 上 lenscrew qr 输出的配对内容（JSON）粘到这里：")
@@ -319,5 +322,26 @@ private final class CameraPreviewUIView: UIView {
 
     var previewLayer: AVCaptureVideoPreviewLayer {
         layer as! AVCaptureVideoPreviewLayer
+    }
+
+    /// 横竖屏切换时同步预览方向，避免 iPad 横屏取景仍按竖屏裁切
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard let connection = previewLayer.connection,
+              connection.isVideoOrientationSupported
+        else { return }
+        connection.videoOrientation = Self.videoOrientation(for: window?.windowScene?.interfaceOrientation)
+    }
+
+    private static func videoOrientation(
+        for interface: UIInterfaceOrientation?
+    ) -> AVCaptureVideoOrientation {
+        // UIInterfaceOrientation 与 AVCaptureVideoOrientation 的左右横屏是对调的
+        switch interface {
+        case .landscapeLeft: return .landscapeRight
+        case .landscapeRight: return .landscapeLeft
+        case .portraitUpsideDown: return .portraitUpsideDown
+        default: return .portrait
+        }
     }
 }

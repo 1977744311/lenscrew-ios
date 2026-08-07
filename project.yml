@@ -7,7 +7,7 @@ options:
   # 逐级建组才能让两个 target 引用同一份 group/file reference
   createIntermediateGroups: true
   deploymentTarget:
-    iOS: "17.0"
+    iOS: "16.0"
     watchOS: "10.0"
 packages:
   LensCrewKit:
@@ -63,6 +63,13 @@ targets:
           NSAllowsLocalNetworking: true
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
+        # iPhone 竖屏优先；iPad 支持竖屏 + 左右横屏（不含倒置）
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        "UISupportedInterfaceOrientations~ipad":
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         # 眼镜使用者自建时填自己的 Meta 凭据（见 docs/glasses-self-build.md）；
         # 占位来自 Base.xcconfig，空值时 DAT 配置失败但 App 照常启动
         MWDAT:
@@ -72,8 +79,9 @@ targets:
     settings:
       base:
         SWIFT_VERSION: "6.0"
-        TARGETED_DEVICE_FAMILY: "1"
+        TARGETED_DEVICE_FAMILY: "1,2"
         INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
     # 显式共享 scheme：App 单测与 UI 测试都挂在 LensCrew scheme 的 test action 上，
     # `xcodebuild test -scheme LensCrew -only-testing:<target>` 按需选跑
     scheme:

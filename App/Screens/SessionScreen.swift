@@ -5,17 +5,20 @@ import SwiftUI
 /// 屏 2 · 会话流水：压缩导航头 + 按块样式渲染的流水 + 底部 composer。
 /// 用 (hostID, sessionID) 复合键寻址，所有动作路由到会话所属主机。
 struct SessionScreen: View {
-    let model: CrewViewModel
+    @ObservedObject var model: CrewViewModel
     let sessionKey: SessionKey
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var draft = ""
     @State private var expandedReasoning: Set<String> = []
     @State private var expandedShells: Set<String> = []
     @State private var presentedApproval: ApprovalPresentation?
     @State private var gitRoute: GitRoute?
-    @State private var dictation = SpeechDictation()
+    @StateObject private var dictation = SpeechDictation()
     /// 听写开始时的草稿快照；识别的 partial 结果整段替换其后的部分
     @State private var dictationBase = ""
+    /// iOS 16 onChange 只有新值：用这份快照对比出「新到达」的审批
+    @State private var previousPendingIDs: [String] = []
 
     private var state: SessionState? {
         model.sessionState(for: sessionKey)
@@ -25,12 +28,22 @@ struct SessionScreen: View {
         state?.pendingApprovals.map(\.id) ?? []
     }
 
+    private var showsBackButton: Bool { sizeClass != .regular }
+
     var body: some View {
         Group {
             if let state {
                 content(state)
             } else {
-                ContentUnavailableView("会话已结束", systemImage: "xmark.circle")
+                VStack(spacing: 10) {
+                    Image(systemName: "xmark.circle")
+                        .font(.system(size: 32))
+                        .foregroundStyle(LC.text3)
+                    Text("会话已结束")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(LC.text2)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .background(LC.bg)
@@ -43,17 +56,18 @@ struct SessionScreen: View {
             GitScreen(model: model, route: route)
         }
         // 新审批到达自动弹 sheet；结清（approvalSettled）才撤，不做乐观关闭
-        .onChange(of: pendingIDs) { old, new in
+        .onChange(of: pendingIDs) { new in
             if let presented = presentedApproval, !new.contains(presented.approval.id) {
                 presentedApproval = nil
             }
             if presentedApproval == nil,
-               let freshID = new.first(where: { !old.contains($0) }) {
+               let freshID = new.first(where: { !previousPendingIDs.contains($0) }) {
                 presentApproval(id: freshID)
             }
+            previousPendingIDs = new
         }
         // 听写的 partial 结果是全量替换式：草稿 = 开始时的快照 + 当前识别文本
-        .onChange(of: dictation.transcript) { _, transcript in
+        .onChange(of: dictation.transcript) { transcript in
             guard dictation.isListening || !transcript.isEmpty else { return }
             draft = dictationBase + transcript
         }
@@ -111,16 +125,18 @@ struct SessionScreen: View {
 
     private func navHeader(_ state: SessionState) -> some View {
         HStack(spacing: 10) {
-            Button {
-                dismiss()
-            } label: {
-                Image(systemName: "chevron.left")
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(.white)
-                    .frame(width: 34, height: 34)
-                    .background(LC.elev, in: Circle())
+            if showsBackButton {
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "chevron.left")
+                        .font(.system(size: 15, weight: .bold))
+                        .foregroundStyle(.white)
+                        .frame(width: 34, height: 34)
+                        .background(LC.elev, in: Circle())
+                }
+                .buttonStyle(.plain)
             }
-            .buttonStyle(.plain)
             VStack(alignment: .leading, spacing: 2) {
                 Text(state.session.title)
                     .font(.system(size: 17, weight: .bold))
@@ -294,10 +310,10 @@ struct SessionScreen: View {
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
+                .lcReadableWidth()
             }
             .scrollDismissesKeyboard(.interactively)
-            .defaultScrollAnchor(.bottom)
-            .onChange(of: state.blocks.count) {
+            .onChange(of: state.blocks.count) { _ in
                 guard let last = items(state).last else { return }
                 withAnimation { proxy.scrollTo(last.id, anchor: .bottom) }
             }
@@ -335,7 +351,7 @@ struct SessionScreen: View {
                 Image(systemName: "exclamationmark.circle")
                     .font(.system(size: 12))
                     .foregroundStyle(LC.red)
-                Text(message).foregroundStyle(LC.red)
+                Text(message).foregroundColor(LC.red)
             }
         }
     }
@@ -409,13 +425,13 @@ struct SessionScreen: View {
         if status == .pending {
             thinRow {
                 Circle().fill(LC.orange).frame(width: 5, height: 5)
-                Text("等待批准 · ").foregroundStyle(LC.text3)
+                Text("等待批准 · ").foregroundColor(LC.text3)
                     + Text(command).font(.system(size: 12.5, design: .monospaced))
             }
         } else if status == .running, output.isEmpty {
             thinRow {
                 PulseDot(color: LC.runningOrange, size: 5)
-                Text("正在执行 · ").foregroundStyle(LC.text3)
+                Text("正在执行 · ").foregroundColor(LC.text3)
                     + Text(command).font(.system(size: 12.5, design: .monospaced))
             }
         } else {
@@ -523,8 +539,8 @@ struct SessionScreen: View {
     @ViewBuilder
     private func diffCounts(_ file: FileChangeSummary) -> some View {
         if let added = file.added, let removed = file.removed {
-            (Text("+\(added)").foregroundStyle(LC.green)
-                + Text(" −\(removed)").foregroundStyle(LC.red))
+            (Text("+\(added)").foregroundColor(LC.green)
+                + Text(" −\(removed)").foregroundColor(LC.red))
                 .font(.system(size: 12, weight: .semibold, design: .monospaced))
         }
     }
@@ -835,10 +851,6 @@ struct SessionScreen: View {
                 .foregroundStyle(dictation.isListening ? .white : LC.text2)
                 .frame(width: 34, height: 34)
                 .background(dictation.isListening ? LC.red : .clear, in: Circle())
-                .symbolEffect(
-                    .variableColor.iterative, options: .repeating,
-                    isActive: dictation.isListening
-                )
         }
         .buttonStyle(.plain)
         .accessibilityLabel(dictation.isListening ? "结束听写" : "语音输入")

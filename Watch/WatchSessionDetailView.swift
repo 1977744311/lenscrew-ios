@@ -3,7 +3,7 @@ import SwiftUI
 /// W3 · 会话详情：标题 + 状态行 + 最近块摘要 + 底部「听写追加 / 中断」，
 /// 对应 mockup 的 WatchSessionDetail。听写是手表上唯一的文本输入面。
 struct WatchSessionDetailView: View {
-    let link: WatchLink
+    @ObservedObject var link: WatchLink
     /// WatchSessionDTO.id（hostID#sessionID）；从快照实时解引用，随推送更新
     let sessionID: String
 

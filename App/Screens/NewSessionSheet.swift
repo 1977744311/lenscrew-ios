@@ -5,8 +5,9 @@ import SwiftUI
 /// 屏 4 · 新会话：AGENT 单选 + 工作目录 MRU + 模式，底部「开始会话」。
 /// 配了多台电脑时可选目标主机，创建按 hostID 路由；单台时不出这排选择。
 struct NewSessionSheet: View {
-    let model: CrewViewModel
+    @ObservedObject var model: CrewViewModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var agent: AgentKind = .codex
     @State private var hostID: UUID?
     @State private var selectedRoot: String?
@@ -104,16 +105,18 @@ struct NewSessionSheet: View {
         .padding(.horizontal, 18)
         .padding(.top, 18)
         .padding(.bottom, 10)
+        .frame(maxWidth: sizeClass == .regular ? 560 : .infinity)
+        .frame(maxWidth: .infinity)
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
-        .presentationBackground(Color(hex: 0x161618))
+        .lcPresentationBackground(Color(hex: 0x161618))
         .onAppear {
             if selectedRoot == nil {
                 selectedRoot = model.hosts.workspaceRoots.first
             }
         }
         // 换 agent 后档位与模型集合都不同，回到新 agent 的默认
-        .onChange(of: agent) { _, fresh in
+        .onChange(of: agent) { fresh in
             if let modeID, !AgentModes.options(for: fresh).contains(where: { $0.id == modeID }) {
                 self.modeID = nil
             }
@@ -121,7 +124,7 @@ struct NewSessionSheet: View {
             reasoningEffort = nil
         }
         // 换模型后旧档位未必受支持，回到 CLI 默认
-        .onChange(of: modelID) { _, _ in
+        .onChange(of: modelID) { _ in
             reasoningEffort = nil
         }
     }

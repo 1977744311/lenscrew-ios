@@ -4,7 +4,9 @@ import SwiftUI
 /// 屏 6 · 设置：电脑（多主机）/ 安全 / 通知 / 关于。
 /// 用 List 而不是手搓卡片，是为了白拿滑动删除；行内样式仍按 mockup 的 SetRow。
 struct SettingsScreen: View {
-    let model: CrewViewModel
+    @ObservedObject var model: CrewViewModel
+    /// Compact 底栏占位；iPad 顶栏布局关掉
+    var showsDockClearance: Bool = true
     @State private var showAddComputer = false
     @State private var showTokenEditor = false
     @State private var tokenDraft = ""
@@ -26,8 +28,13 @@ struct SettingsScreen: View {
             .listStyle(.insetGrouped)
             .scrollContentBackground(.hidden)
             .environment(\.defaultMinListRowHeight, 52)
-            .contentMargins(.bottom, 100, for: .scrollContent)
+            .safeAreaInset(edge: .bottom) {
+                if showsDockClearance {
+                    Color.clear.frame(height: 100)
+                }
+            }
         }
+        .lcReadableWidth()
         .background(LC.bg)
         .sheet(isPresented: $showAddComputer) {
             AddComputerSheet(model: model)
@@ -288,7 +295,7 @@ private struct SetRow<Right: View>: View {
 
 /// 添加电脑：扫码配对（E2EE）或手动填配置（明文 HTTP + 口令）。
 private struct AddComputerSheet: View {
-    let model: CrewViewModel
+    @ObservedObject var model: CrewViewModel
     @Environment(\.dismiss) private var dismiss
     @State private var showScanner = false
     @State private var name = ""
@@ -378,7 +385,7 @@ private struct AddComputerSheet: View {
         .padding(.bottom, 10)
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
-        .presentationBackground(Color(hex: 0x161618))
+        .lcPresentationBackground(Color(hex: 0x161618))
         .fullScreenCover(isPresented: $showScanner) {
             PairingScanView(model: model) {
                 // 配对成功：收掉扫码页和本 sheet，回设置页看新主机行

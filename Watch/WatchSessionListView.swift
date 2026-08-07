@@ -4,7 +4,7 @@ import SwiftUI
 /// 对应 mockup 的 WatchSessionList。数据是 iPhone 推来的跨主机聚合快照，
 /// >1 台 Mac 时行上带主机名。
 struct WatchSessionListView: View {
-    let link: WatchLink
+    @ObservedObject var link: WatchLink
 
     var body: some View {
         Group {

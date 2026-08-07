@@ -1,4 +1,5 @@
 import AgentProtocol
+import Combine
 import SwiftUI
 import WatchConnectivity
 import WidgetKit
@@ -7,7 +8,7 @@ import WidgetKit
 /// 全部数据经 WatchConnectivity 由 iPhone 中转（对端见 App/Support/WatchBridge.swift）。
 @main
 struct LensCrewWatchApp: App {
-    @State private var link = WatchLink()
+    @StateObject private var link = WatchLink()
 
     var body: some Scene {
         WindowGroup {
@@ -25,7 +26,7 @@ enum WatchRoute: Hashable {
 }
 
 struct WatchRootView: View {
-    let link: WatchLink
+    @ObservedObject var link: WatchLink
     @State private var path: [WatchRoute] = []
 
     var body: some View {
@@ -50,14 +51,13 @@ struct WatchRootView: View {
 /// 手表侧 WC 客户端：收 iPhone 推的快照驱动三屏渲染，把动作回传 iPhone。
 /// 手表不知道 bridge 的存在，动作能否送达以快照的后续变化为准。
 @MainActor
-@Observable
-final class WatchLink: NSObject {
+final class WatchLink: NSObject, ObservableObject {
     /// 最新一瞥快照；applicationContext 语义，只有最新一份有意义
-    private(set) var snapshot: WatchSnapshot = .empty
+    @Published private(set) var snapshot: WatchSnapshot = .empty
     /// 至少收到过一次快照——区分「还没同步」与「确实没有会话」
-    private(set) var hasSynced = false
+    @Published private(set) var hasSynced = false
     /// 已回传待确认的审批（DTO 复合 id）；确认以它从快照里消失为准
-    private(set) var submittedApprovalIDs: Set<String> = []
+    @Published private(set) var submittedApprovalIDs: Set<String> = []
 
     func activate() {
         guard WCSession.isSupported() else { return }

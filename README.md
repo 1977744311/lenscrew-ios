@@ -66,7 +66,7 @@ xcodegen generate
 open LensCrew.xcodeproj
 ```
 
-Xcode 里选自己的 Team、改 Bundle ID，签名装到 iPhone（iOS 17+）。不配眼镜凭据也能编译运行：模拟器走 Mock 眼镜，手机端六屏全部可用。
+Xcode 里选自己的 Team、改 Bundle ID，签名装到 iPhone 或 iPad（iOS 16+）。不配眼镜凭据也能编译运行：模拟器走 Mock 眼镜，手机 / 平板端六屏全部可用。iPad 宽屏用分栏会话布局，窄分屏仍走手机式底栏。
 
 **3. 手机配对**：App 内「添加电脑」扫 bridge 打印的二维码，完成端到端加密配对，即可建会话、发消息、批审批。
 

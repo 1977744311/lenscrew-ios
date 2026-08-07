@@ -15,7 +15,7 @@ struct GitRoute: Hashable, Identifiable {
 /// 手机是控制面——能收的改动收进提交推走，收不了的（冲突、非快进）
 /// 原样把 git 的话摆出来，让用户回 Mac 处理，不在手机上制造复杂状态。
 struct GitScreen: View {
-    let model: CrewViewModel
+    @ObservedObject var model: CrewViewModel
     let route: GitRoute
     @Environment(\.dismiss) private var dismiss
 
@@ -171,8 +171,8 @@ struct GitScreen: View {
                 Spacer(minLength: 8)
                 if let ahead = status.ahead, let behind = status.behind {
                     LCChip(fontSize: 11.5) {
-                        (Text("↑\(ahead)").foregroundStyle(ahead > 0 ? LC.green : LC.text3)
-                            + Text("  ↓\(behind)").foregroundStyle(behind > 0 ? LC.orange : LC.text3))
+                        (Text("↑\(ahead)").foregroundColor(ahead > 0 ? LC.green : LC.text3)
+                            + Text("  ↓\(behind)").foregroundColor(behind > 0 ? LC.orange : LC.text3))
                             .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
                     }
                 }
@@ -406,8 +406,8 @@ struct GitScreen: View {
     @ViewBuilder
     private func lineCounts(_ change: GitFileChange) -> some View {
         if let added = change.added, let removed = change.removed {
-            (Text("+\(added)").foregroundStyle(LC.green)
-                + Text(" −\(removed)").foregroundStyle(LC.red))
+            (Text("+\(added)").foregroundColor(LC.green)
+                + Text(" −\(removed)").foregroundColor(LC.red))
                 .font(.system(size: 11.5, weight: .semibold, design: .monospaced))
                 .lineLimit(1)
                 .fixedSize()
@@ -617,7 +617,7 @@ struct GitScreen: View {
 /// 头部先给增删统计与截断提示（不用滚到底才发现），行按需分批渲染
 /// （滚多少渲多少，首屏不为万行 diff 买单），超长部分由 bridge 按行截断。
 struct GitDiffSheet: View {
-    let model: CrewViewModel
+    @ObservedObject var model: CrewViewModel
     let route: GitRoute
     let path: String?
     let staged: Bool
@@ -660,8 +660,8 @@ struct GitDiffSheet: View {
                 Text(staged ? "已暂存" : "工作区")
             }
             if additions > 0 || deletions > 0 {
-                (Text("+\(additions)").foregroundStyle(LC.green)
-                    + Text(" −\(deletions)").foregroundStyle(LC.red))
+                (Text("+\(additions)").foregroundColor(LC.green)
+                    + Text(" −\(deletions)").foregroundColor(LC.red))
                     .font(.system(size: 12, weight: .semibold, design: .monospaced))
                     .fixedSize()
             }
@@ -699,17 +699,35 @@ struct GitDiffSheet: View {
     @ViewBuilder
     private var content: some View {
         if let errorMessage {
-            ContentUnavailableView {
-                Label("拿不到 diff", systemImage: "exclamationmark.triangle")
-            } description: {
+            VStack(spacing: 10) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 28))
+                    .foregroundStyle(LC.orange)
+                Text("拿不到 diff")
+                    .font(.system(size: 16, weight: .semibold))
+                    .foregroundStyle(LC.text)
                 Text(errorMessage)
+                    .font(.system(size: 13))
+                    .foregroundStyle(LC.text2)
+                    .multilineTextAlignment(.center)
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(24)
         } else if let lines {
             if lines.isEmpty {
-                ContentUnavailableView(
-                    "没有差异", systemImage: "checkmark.circle",
-                    description: Text(staged ? "暂存区与 HEAD 一致" : "工作区与暂存区一致")
-                )
+                VStack(spacing: 10) {
+                    Image(systemName: "checkmark.circle")
+                        .font(.system(size: 28))
+                        .foregroundStyle(LC.green)
+                    Text("没有差异")
+                        .font(.system(size: 16, weight: .semibold))
+                        .foregroundStyle(LC.text)
+                    Text(staged ? "暂存区与 HEAD 一致" : "工作区与暂存区一致")
+                        .font(.system(size: 13))
+                        .foregroundStyle(LC.text2)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(24)
             } else {
                 diffBody(lines)
             }

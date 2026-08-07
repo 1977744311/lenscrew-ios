@@ -5,12 +5,18 @@ import SwiftUI
 
 /// 屏 1 · 指挥台：跨主机合并的审批队列置顶 + 全部主机会话按最近活动统一排序。
 struct HomeScreen: View {
-    let model: CrewViewModel
+    @ObservedObject var model: CrewViewModel
     @Binding var path: [SessionKey]
+    /// Regular 分栏：非 nil 时点会话写选中，不再 path.append
+    var selectedSession: Binding<SessionKey?>? = nil
+    /// Compact 底栏占位；分栏侧栏里关掉
+    var showsDockClearance: Bool = true
     @State private var filter: AgentKind?
     /// 已发出裁决、还没等到 approvalSettled 的审批：期间禁用按钮防止重复提交，
     /// 但卡不撤——撤卡的唯一依据是 bridge 的结清事件。键是 hostID#approvalID。
     @State private var resolvingApprovals: Set<String> = []
+
+    private var isSelectionMode: Bool { selectedSession != nil }
 
     var body: some View {
         ScrollView {
@@ -35,7 +41,23 @@ struct HomeScreen: View {
         }
         .background(LC.bg)
         .toolbar(.hidden, for: .navigationBar)
-        .contentMargins(.bottom, 100, for: .scrollContent)
+        .safeAreaInset(edge: .bottom) {
+            if showsDockClearance {
+                Color.clear.frame(height: 100)
+            }
+        }
+    }
+
+    private func openSession(_ key: SessionKey) {
+        if let selectedSession {
+            selectedSession.wrappedValue = key
+        } else {
+            path.append(key)
+        }
+    }
+
+    private func isSelected(_ key: SessionKey) -> Bool {
+        selectedSession?.wrappedValue == key
     }
 
     // MARK: - 头部
@@ -191,7 +213,7 @@ struct HomeScreen: View {
             let resolving = resolvingApprovals.contains(item.id)
             HStack(spacing: 8) {
                 LCButton(title: "查看上下文", kind: .tinted, minHeight: 40, fontSize: 14) {
-                    path.append(item.key)
+                    openSession(item.key)
                 }
                 .accessibilityIdentifier("home.approval.context")
                 if let once = onceAllowOption(approval) {
@@ -251,27 +273,29 @@ struct HomeScreen: View {
                         if index > 0 {
                             Hairline().padding(.leading, 16)
                         }
-                        NavigationLink(value: item.key) {
-                            sessionRow(item)
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityIdentifier("home.sessionCard")
-                        .contextMenu {
-                            if item.state.isResumable {
-                                Button {
-                                    Task { await model.resumeSession(item.key) }
+                        sessionLink(item)
+                            .accessibilityIdentifier("home.sessionCard")
+                            .contextMenu {
+                                if item.state.isResumable {
+                                    Button {
+                                        Task { await model.resumeSession(item.key) }
+                                    } label: {
+                                        Label("续接会话", systemImage: "arrow.uturn.forward.circle")
+                                    }
+                                }
+                                // 关会话 = 结束 agent 进程并从列表移除；
+                                // bridge 重启后不认识的残留行也从这里清掉
+                                Button(role: .destructive) {
+                                    Task {
+                                        if isSelected(item.key) {
+                                            selectedSession?.wrappedValue = nil
+                                        }
+                                        await model.closeSession(item.key)
+                                    }
                                 } label: {
-                                    Label("续接会话", systemImage: "arrow.uturn.forward.circle")
+                                    Label("关闭会话", systemImage: "xmark.circle")
                                 }
                             }
-                            // 关会话 = 结束 agent 进程并从列表移除；
-                            // bridge 重启后不认识的残留行也从这里清掉
-                            Button(role: .destructive) {
-                                Task { await model.closeSession(item.key) }
-                            } label: {
-                                Label("关闭会话", systemImage: "xmark.circle")
-                            }
-                        }
                     }
                 }
                 .background(LC.elev, in: RoundedRectangle(cornerRadius: 20))
@@ -413,7 +437,26 @@ struct HomeScreen: View {
         .buttonStyle(.plain)
     }
 
-    private func sessionRow(_ item: AggregatedSession) -> some View {
+    @ViewBuilder
+    private func sessionLink(_ item: AggregatedSession) -> some View {
+        let selected = isSelected(item.key)
+        let row = sessionRow(item, selected: selected)
+        if isSelectionMode {
+            Button {
+                openSession(item.key)
+            } label: {
+                row
+            }
+            .buttonStyle(.plain)
+        } else {
+            NavigationLink(value: item.key) {
+                row
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func sessionRow(_ item: AggregatedSession, selected: Bool = false) -> some View {
         let state = item.state
         return VStack(alignment: .leading, spacing: 7) {
             HStack(spacing: 8) {
@@ -452,6 +495,15 @@ struct HomeScreen: View {
         .padding(.vertical, 14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
+        .background(selected ? LC.elev2 : Color.clear)
+        .overlay(alignment: .leading) {
+            if selected {
+                Rectangle()
+                    .fill(LC.blue)
+                    .frame(width: 2)
+                    .padding(.vertical, 10)
+            }
+        }
     }
 
     private func metaLine(_ session: AgentSession) -> String {
@@ -467,7 +519,7 @@ struct HomeScreen: View {
                 .foregroundStyle(LC.text2)
             Text(
                 model.isConnected
-                    ? "点右下角 + 开一个"
+                    ? "点 + 开一个"
                     : "在设置里添加电脑，或点上方主机芯片重连"
             )
             .font(.system(size: 12))

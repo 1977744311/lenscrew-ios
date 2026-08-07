@@ -320,3 +320,32 @@ func blockPreview(_ block: TranscriptBlock) -> (text: String, mono: Bool) {
 func fileName(_ path: String) -> String {
     path.split(separator: "/").last.map(String.init) ?? path
 }
+
+extension View {
+    /// `presentationBackground` 要 iOS 16.4+；16.0–16.3 跳过（sheet 内容自带底色）
+    @ViewBuilder
+    func lcPresentationBackground(_ color: Color) -> some View {
+        if #available(iOS 16.4, *) {
+            self.presentationBackground(color)
+        } else {
+            self
+        }
+    }
+
+    /// Regular 宽屏把内容收在可读栏宽并居中；Compact 铺满。
+    func lcReadableWidth(_ maxWidth: CGFloat = 840) -> some View {
+        modifier(LCReadableWidth(maxWidth: maxWidth))
+    }
+}
+
+/// iPad / 宽分屏：限制正文栏宽并水平居中，避免 Settings / 流水拉成一条超长行。
+struct LCReadableWidth: ViewModifier {
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    var maxWidth: CGFloat = 840
+
+    func body(content: Content) -> some View {
+        content
+            .frame(maxWidth: sizeClass == .regular ? maxWidth : .infinity)
+            .frame(maxWidth: .infinity)
+    }
+}
