@@ -27,6 +27,7 @@ import {
   type CodexTurnStartParams,
   type CodexTurnSteerParams,
 } from "./protocol.ts";
+import { rpcTimeoutMs, withTimeout } from "../rpcTimeout.ts";
 
 /** thread 级 sandbox 是字符串、turn 级是对象，两个 API 的形态不一致 */
 function turnSandboxPolicy(sandbox: CodexSandboxMode): CodexTurnSandboxPolicy {
@@ -470,14 +471,23 @@ export class CodexAdapter implements AgentAdapter {
 
   #request(method: string, params: unknown): Promise<unknown> {
     const id = this.#nextRequestId++;
-    return new Promise<unknown>((resolve, reject) => {
-      this.#pending.set(String(id), { resolve, reject });
+    const key = String(id);
+    const ms = rpcTimeoutMs(method);
+    const promise = new Promise<unknown>((resolve, reject) => {
+      this.#pending.set(key, { resolve, reject });
       try {
         this.#write({ jsonrpc: "2.0", id, method, params });
       } catch (error) {
-        this.#pending.delete(String(id));
+        this.#pending.delete(key);
         reject(error instanceof Error ? error : new Error(String(error)));
       }
+    });
+    return withTimeout(promise, ms, method, {
+      onTimeout: () => {
+        const pending = this.#pending.get(key);
+        this.#pending.delete(key);
+        pending?.reject(new Error(`rpc_timeout: ${method} after ${ms}ms`));
+      },
     });
   }
 

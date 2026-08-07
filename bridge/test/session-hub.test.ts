@@ -455,13 +455,15 @@ test("关闭会话后从列表移除，并广播 sessionClosed 让客户端撤�
   assert.equal(closed.sessionId, "s-1");
 });
 
-test("adapter 启动失败作为致命错误上报，而不是让会话僵在启动中", async () => {
+test("adapter 启动失败：关 adapter、致命错误、sessionClosed，且不留僵尸会话", async () => {
   const events: BridgeEvent[] = [];
+  const adapters: FakeAdapter[] = [];
   const hub = new SessionHub((_kind, sink) => {
     const adapter = new FakeAdapter(sink);
     adapter.start = async () => {
       throw new Error("codex app-server 未安装");
     };
+    adapters.push(adapter);
     return adapter;
   });
   hub.onEvent((event) => events.push(event));
@@ -471,6 +473,13 @@ test("adapter 启动失败作为致命错误上报，而不是让会话僵在启
   assert.ok(failure && failure.type === "bridgeError");
   assert.equal(failure.fatal, true);
   assert.match(failure.message, /未安装/);
+
+  assert.ok(adapters[0]!.calls.includes("close"));
+  assert.deepEqual(hub.listSessions(), []);
+  const closed = events.find((event) => event.type === "sessionClosed");
+  assert.ok(closed?.type === "sessionClosed");
+  assert.equal(closed.sessionId, "s-1");
+  assert.equal(closed.reason, "start failed");
 });
 
 function windowOf(id: string, usedPercent: number) {

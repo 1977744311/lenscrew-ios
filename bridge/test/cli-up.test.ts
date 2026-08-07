@@ -198,7 +198,13 @@ test("--help 覆盖新 flags 与 relay 子命令", async () => {
   const spawned = spawnCli(["up", "--help"], {});
   await once(spawned.child, "exit");
   assert.equal(spawned.child.exitCode, 0);
-  for (const expected of ["--relay", "--name", "--state-dir", "lenscrew relay"]) {
+  for (const expected of [
+    "--relay",
+    "--name",
+    "--state-dir",
+    "--allow-plaintext-lan",
+    "lenscrew relay",
+  ]) {
     assert.ok(spawned.stdout().includes(expected), `--help 应包含 ${expected}`);
   }
 });

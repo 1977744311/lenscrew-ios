@@ -20,10 +20,16 @@ public struct CrewSnapshot: Sendable, Equatable {
 }
 
 public actor CrewCoordinator {
+    /// 全量重建（subscribe fromSeq:0）每会话最短间隔，避免超长会话抖屏
+    private static let fullRebuildCooldown: TimeInterval = 10
+
     private let bridge: any BridgeConnecting
     private let dispatcher: DisplayDispatcher?
     private let budget: GlassLayoutBudget
+    private let now: @Sendable () -> Date
     private let snapshotBus = StreamBroadcaster<CrewSnapshot>(replaysLatest: true)
+    /// nil = 清掉宿主错误条；非 nil = 上抛可见错误（如「流水可能不完整」）
+    private let hostErrorBus = StreamBroadcaster<String?>(replaysLatest: false)
 
     private var store = CrewStore()
     private var navigator = GlassNavigator()
@@ -31,19 +37,29 @@ public actor CrewCoordinator {
     /// 但用户在专注看流水时可能不想被抢屏，手机设置里可以关掉。
     /// 关掉只影响"抢屏"，审批照样进队列、结清后的 dismiss 逻辑也不变。
     private var autoPresentApprovals = true
+    /// 已对某会话发出增量 subscribe、尚等重放把断档补齐
+    private var awaitingGapRepair: [String: Int] = [:]
+    /// 每会话最近一次全量重建时间（限频）
+    private var lastFullRebuildAt: [String: Date] = [:]
+    /// 最近一次上抛的宿主错误（nil = 已清除）；单测可同步读，UI 走 hostErrors 流
+    private var lastHostError: String?
 
     public init(
         bridge: any BridgeConnecting,
         glasses: (any GlassesSessionProviding)? = nil,
-        budget: GlassLayoutBudget = .default
+        budget: GlassLayoutBudget = .default,
+        now: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.bridge = bridge
         self.dispatcher = glasses.map { DisplayDispatcher(session: $0) }
         self.budget = budget
+        self.now = now
     }
 
     public var sessions: [SessionState] { store.orderedSessions }
     public var screen: GlassScreen { navigator.screen }
+    /// 最近一次宿主错误文案；成功补齐后为 nil
+    public var reportedHostError: String? { lastHostError }
 
     public func setAutoPresentApprovals(_ enabled: Bool) {
         autoPresentApprovals = enabled
@@ -52,6 +68,11 @@ public actor CrewCoordinator {
     /// 状态快照流。UI 不该去轮询 actor——每次状态变化推一份，SwiftUI 直接跟着走。
     public nonisolated var snapshots: AsyncStream<CrewSnapshot> {
         snapshotBus.subscribe()
+    }
+
+    /// 宿主可见错误。subscribe 补齐失败等不能静默；nil 表示清掉旧错误。
+    public nonisolated var hostErrors: AsyncStream<String?> {
+        hostErrorBus.subscribe()
     }
 
     // MARK: - 手机端动作
@@ -108,6 +129,8 @@ public actor CrewCoordinator {
     /// 只清客户端侧的残留（bridge 已不认识这个会话时用），并推一份新快照
     public func dropSession(_ sessionID: String) async {
         store.removeSession(sessionID)
+        awaitingGapRepair[sessionID] = nil
+        lastFullRebuildAt[sessionID] = nil
         await renderToGlasses()
     }
 
@@ -150,14 +173,14 @@ public actor CrewCoordinator {
         case let .gap(expected):
             // 漏了事件，续订补齐；不补的话流水会静默错乱
             if let sessionID = event.sessionID {
-                try? await bridge.send(.subscribe(sessionID: sessionID, fromSeq: expected))
+                await repairGap(sessionID: sessionID, expected: expected)
             }
             return
         case .unknownSession(let sessionID):
-            try? await bridge.send(.subscribe(sessionID: sessionID, fromSeq: 0))
+            await subscribeOrReport(sessionID: sessionID, fromSeq: 0, markDesyncedOnFail: false)
             return
         case .applied:
-            break
+            noteSuccessfulApply(event)
         }
 
         // seq 0 的 sessionCreated 是接入补发的合成快照，只有元数据——流水与
@@ -165,7 +188,9 @@ public actor CrewCoordinator {
         // 却点不开任何东西。fromSeq 取 1 而不是 0：replay(0) 会再回一条
         // seq 0 快照，那就循环了。
         if case let .sessionCreated(seq, session) = event, seq == 0 {
-            try? await bridge.send(.subscribe(sessionID: session.id, fromSeq: 1))
+            await subscribeOrReport(
+                sessionID: session.id, fromSeq: 1, markDesyncedOnFail: true
+            )
         }
 
         switch event {
@@ -182,6 +207,93 @@ public actor CrewCoordinator {
         }
 
         await renderToGlasses()
+    }
+
+    // MARK: - 断档补齐
+
+    /// 先增量 subscribe；失败或重放后仍断档 → 限频全量重建；再失败则标 desynced。
+    private func repairGap(sessionID: String, expected: Int) async {
+        if isDesynced(sessionID) {
+            if let last = lastFullRebuildAt[sessionID],
+               now().timeIntervalSince(last) < Self.fullRebuildCooldown {
+                reportHostError("流水可能不完整")
+                return
+            }
+            // 冷却结束：直接再试全量，增量对已对不齐的会话无济于事
+            awaitingGapRepair[sessionID] = nil
+            await fullRebuild(sessionID: sessionID)
+            return
+        }
+
+        let stillGapped = awaitingGapRepair[sessionID] != nil
+        if !stillGapped {
+            do {
+                try await bridge.send(.subscribe(sessionID: sessionID, fromSeq: expected))
+                awaitingGapRepair[sessionID] = expected
+                return
+            } catch {
+                // 增量失败，落入全量重建
+            }
+        }
+        awaitingGapRepair[sessionID] = nil
+        await fullRebuild(sessionID: sessionID)
+    }
+
+    private func isDesynced(_ sessionID: String) -> Bool {
+        store.orderedSessions.contains { $0.session.id == sessionID && $0.isDesynced }
+    }
+
+    private func fullRebuild(sessionID: String) async {
+        let instant = now()
+        if let last = lastFullRebuildAt[sessionID],
+           instant.timeIntervalSince(last) < Self.fullRebuildCooldown {
+            markDesyncedAndReport(sessionID)
+            return
+        }
+        lastFullRebuildAt[sessionID] = instant
+        // fromSeq:0 早于窗口时 hub 会先补一条 sessionCreated 再重放，客户端整表重建
+        do {
+            try await bridge.send(.subscribe(sessionID: sessionID, fromSeq: 0))
+            reportHostError(nil)
+        } catch {
+            markDesyncedAndReport(sessionID)
+        }
+    }
+
+    private func subscribeOrReport(
+        sessionID: String, fromSeq: Int, markDesyncedOnFail: Bool
+    ) async {
+        do {
+            try await bridge.send(.subscribe(sessionID: sessionID, fromSeq: fromSeq))
+        } catch {
+            if markDesyncedOnFail {
+                markDesyncedAndReport(sessionID)
+            } else {
+                reportHostError("流水可能不完整")
+            }
+        }
+    }
+
+    private func noteSuccessfulApply(_ event: BridgeEvent) {
+        guard let sessionID = event.sessionID else { return }
+        if awaitingGapRepair.removeValue(forKey: sessionID) != nil {
+            reportHostError(nil)
+        }
+        if store.orderedSessions.contains(where: { $0.session.id == sessionID && $0.isDesynced }) {
+            store.clearDesynced(sessionID)
+            reportHostError(nil)
+        }
+    }
+
+    private func markDesyncedAndReport(_ sessionID: String) {
+        store.markDesynced(sessionID)
+        reportHostError("流水可能不完整")
+        publishSnapshot()
+    }
+
+    private func reportHostError(_ message: String?) {
+        lastHostError = message
+        hostErrorBus.send(message)
     }
 
     // MARK: - 上行

@@ -73,13 +73,15 @@ Xcode 里选自己的 Team、改 Bundle ID，签名装到 iPhone（iOS 17+）。
 CLI 全部表面：
 
 ```
-lenscrew up    [--host 地址] [--port 4311] [--token 口令] [--relay https://…] [--name 设备名] [--state-dir 目录]
+lenscrew up    [--host 地址] [--port 4311] [--token 口令] [--relay https://…] [--name 设备名] [--state-dir 目录] [--allow-plaintext-lan]
 lenscrew qr    [--state-dir 目录]     # 向本机运行中的 bridge 重开 5 分钟配对窗口并重打印二维码
 lenscrew relay [--host 0.0.0.0] [--port 4370]   # 自架中继服务器
 lenscrew service install [up 选项]   # 装成 launchd 常驻：开机自启、崩溃拉起、日志落盘、口令固定
 lenscrew service uninstall           # 停止并卸载常驻
 lenscrew service status              # 常驻状态（state / pid / 上次退出码）
 ```
+
+**破坏性变更（明文 LAN 门控）：** 非回环监听（`--host 0.0.0.0` 等）时，明文 `/events` `/command` `/git` 默认返回 403；手机请走 E2EE（扫码配对）或 relay。本机回环不受影响。若你知情地要在可信局域网用明文，加 `--allow-plaintext-lan`（`service install` 同样接受该 flag）。
 
 状态目录 `~/.lenscrew`（可用 `LENSCREW_STATE_DIR` 覆盖，权限 0700）：`identity.json`（Ed25519 身份，0600）、`trusted-phones.json`（可信手机公钥）、`apns.json`（用户手工放置，见推送一节）、`push-tokens.json`、`admin.json`、`sessions.json`（活跃会话路由表，重启续接用）与 `logs/`（常驻模式日志）。
 
@@ -88,9 +90,10 @@ lenscrew service status              # 常驻状态（state / pid / 上次退出
 手机不必和 Mac 同一局域网：
 
 - **配对**：扫码即建立信任——二维码内含 Mac 的身份公钥作信任根，配对窗口 5 分钟时效
-- **端到端加密**：X25519 密钥协商 + Ed25519 身份签名 + HKDF-SHA256 派生 + 方向隔离的 AES-256-GCM，counter 即 nonce、单调递增防重放
+- **端到端加密**：X25519 密钥协商 + Ed25519 身份签名（Node / CryptoKit **验签互通**，签名字节本身因随机化不必一致）+ HKDF-SHA256 派生 + 方向隔离的 AES-256-GCM，counter 即 nonce、单调递增防重放
 - **自架 relay**：`lenscrew relay` 部署到 VPS，按 macDeviceId 分房间、只转发密文、不缓冲，日志仅打房间号哈希前 8 位——relay 被攻破也只见密文
 - **路径选择**：局域网直连与 relay 中继同协议，直连优先、失败回退中继
+- **公共 Wi-Fi**：口令与明文 HTTP **不是**信任边界；公共或不信任网络必须用 relay + E2EE，不要 `--allow-plaintext-lan`
 
 协议细节与威胁模型见 [docs/remote-access-security.md](docs/remote-access-security.md)，relay 部署见 [docs/self-hosting-relay.md](docs/self-hosting-relay.md)。
 
@@ -122,7 +125,7 @@ Meta Ray-Ban Display 眼镜功能是可选延伸，使用者自行注册 Meta �
 
 ## 运行时接口矩阵
 
-三个 agent 的程序化接口差异很大。下表基于对表头所列版本实际行为的验证，而非官方文档转述；上游版本更新后可能失准，欢迎提 issue 勘误。
+三个 agent 的程序化接口差异很大。下表基于对表头所列版本实际行为的验证，而非官方文档转述；上游版本更新后可能失准，欢迎提 issue 勘误。钉死副本见 [`protocol/fixtures/agent-versions.json`](protocol/fixtures/agent-versions.json)；维护者可用 `cd bridge && node scripts/agent-smoke.ts` 对本机已装 CLI 跑最短握手→会话→一句 prompt→teardown（缺 CLI 则跳过；**不**进默认 PR CI，见 [CONTRIBUTING.md](CONTRIBUTING.md)）。
 
 | | Codex 0.144.4 | Claude Code 2.1.215 | Cursor 2026.07.23 |
 |---|---|---|---|
@@ -133,11 +136,11 @@ Meta Ray-Ban Display 眼镜功能是可选延伸，使用者自行注册 Meta �
 
 三处经验证与文档或生成物不一致的行为，按文档实现会踩坑：
 
-**Cursor 的 `-p` 模式没有审批通道。** 需要审批的 shell 调用不会向客户端发请求，而是直接以 `tool_call/completed` 且 `result.rejected` 收场。要审批必须走 ACP。这正是契约把 `capabilities` 做成 adapter 运行时自陈、而不是按 agent 种类硬编码的原因。
-
 **Codex 的 v2 审批不吃 `ReviewDecision`。** `generate-ts` 导出的 `ReviewDecision`（`approved` / `denied` …）只属于旧版通道；v2 要的是 `accept` / `acceptForSession` / `decline` / `cancel`。发错不报 JSON-RPC 错误，命令静默以 `declined` 收场。另外线上的审批请求带 `availableDecisions` 字段，生成物里没有，它才是本次可用裁决的权威来源。
 
 **Claude 的 `--permission-prompt-tool` 只是从 `--help` 里隐藏了。** 它仍然存在，且 `stdio` 是保留值，正是审批通道的开关；不带它，headless 会话会静默拒绝每一个工具调用。传别的字符串会被当成 MCP 工具名去查然后退出。
+
+**Cursor 走 ACP。** 审批经 `session/request_permission`；实测有三处与 [ACP](https://agentclientprotocol.com) schema / 生成物不一致（见上表），按文档实现会踩坑。
 
 ## 眼镜端约束
 
@@ -184,12 +187,15 @@ cd bridge && npx tsc --noEmit                 # 类型检查（运行时靠类�
 
 契约同步靠 `protocol/fixtures/`：同一份 JSON 被两种语言的测试同时消费，任一侧改了线上格式而没同步另一侧，两边都会红。端到端链路由 `Tests/LensCrewCoreTests/EndToEndTests.swift` 覆盖——真起 bridge 进程，一路验到眼镜屏上出现审批卡。
 
+真 CLI 烟雾（可选，维护者本机 / `workflow_dispatch`）：`cd bridge && node scripts/agent-smoke.ts`。普通单测不依赖 agent 是否安装。
+
 贡献流程与规范见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 安全与隐私
 
-- **口令只防误连**，不是安全边界；端到端加密才是安全边界
-- **E2EE**：身份签名 + 全字段绑定的握手 transcript 防降级与中间人；方向隔离密钥 + 单调 counter 防重放
+- **口令只防误连**，不是安全边界；端到端加密才是安全边界。明文 `/events` `/command` `/git` 同样不是信任边界
+- **非回环默认关明文**：`--host` 绑到局域网或 `0.0.0.0` 时拒绝明文端点，除非 `--allow-plaintext-lan`；公共 Wi-Fi 必须 relay + E2EE
+- **E2EE**：身份签名（跨实现验签互通）+ 全字段绑定的握手 transcript 防降级与中间人；方向隔离密钥 + 单调 counter 防重放
 - **relay 零知识**：只见密文与房间号，日志只记房间号哈希前 8 位，不缓冲任何帧
 - **密钥只落两处**：iOS Keychain（`WhenUnlockedThisDeviceOnly`）与 Mac `~/.lenscrew`（目录 0700、文件 0600），绝不入库
 - **本地优先**：代码、仓库、agent 进程全在 Mac，云端至多经过一台只见密文的自架 relay

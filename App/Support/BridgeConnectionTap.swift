@@ -2,11 +2,12 @@ import AgentProtocol
 import BridgeLink
 import Foundation
 
-/// 给 bridge 连接包一层旁路：事件原样转发给协调层，同时复制一份给 UI。
+/// 给 bridge 连接包一层旁路：事件原样转发给协调层，同时复制一份给侧信道。
 ///
-/// 需要它是因为 turnCompleted 的用量（tokens）不进 CrewStore 的流水，
+/// 需要它是因为 turnCompleted 的用量（tokens）与 quota 不进 CrewStore 的流水，
 /// 而 AsyncStream 只允许单消费者——直接让 VM 和 coordinator 抢同一条流，
-/// 事件会被随机瓜分。App 层包一层就能拿到用量做轮次分隔线，不用改库层契约。
+/// 事件会被随机瓜分。App 层包一层，由 `SideChannelDigest` 离主线程消化，
+/// 仅变更时 hop 回 MainActor（会话本体仍走 coordinator.snapshots）。
 final class BridgeConnectionTap: BridgeConnecting, @unchecked Sendable {
     private let base: any BridgeConnecting
     /// 协调层消费的主流

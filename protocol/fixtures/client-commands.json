@@ -1,0 +1,66 @@
+[
+  {
+    "type": "listSessions"
+  },
+  {
+    "type": "createSession",
+    "agent": "codex",
+    "workspaceRoot": "/Users/dev/project",
+    "model": null,
+    "modeId": null,
+    "reasoningEffort": null
+  },
+  {
+    "type": "createSession",
+    "agent": "claude",
+    "workspaceRoot": "/tmp/ws",
+    "model": "sonnet",
+    "modeId": "plan",
+    "reasoningEffort": "high"
+  },
+  {
+    "type": "resumeSession",
+    "agent": "cursor",
+    "nativeId": "acp-session-xyz",
+    "workspaceRoot": "/Users/dev/project"
+  },
+  {
+    "type": "sendMessage",
+    "sessionId": "s-001",
+    "text": "修登录 500"
+  },
+  {
+    "type": "interrupt",
+    "sessionId": "s-001"
+  },
+  {
+    "type": "resolveApproval",
+    "sessionId": "s-001",
+    "approvalId": "a-1",
+    "optionId": "approved"
+  },
+  {
+    "type": "setSessionMode",
+    "sessionId": "s-001",
+    "modeId": "full"
+  },
+  {
+    "type": "setSessionModel",
+    "sessionId": "s-001",
+    "modelId": "gpt-5.6-terra"
+  },
+  {
+    "type": "setSessionReasoningEffort",
+    "sessionId": "s-001",
+    "effort": "xhigh"
+  },
+  {
+    "type": "closeSession",
+    "sessionId": "s-001"
+  },
+  {
+    "type": "subscribe",
+    "sessionId": "s-001",
+    "fromSeq": 42
+  }
+]

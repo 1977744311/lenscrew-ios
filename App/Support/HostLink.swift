@@ -34,6 +34,10 @@ final class HostLink: Identifiable {
     /// 本主机的账号级额度，按 agent 各留最新一份（目前只有 codex 有通道）。
     /// bridge 在接入时会补发缓存快照，断线重连后立即恢复，无需本地持久化
     private(set) var quota: [AgentKind: AgentQuotaSnapshot] = [:]
+    /// 旁路侧信道回主线程发布次数（应 ≪ sideChannelEventsSeen；测试/对照用）
+    private(set) var sideChannelMainActorHops = 0
+    /// 旁路见过的 raw 事件数（含不发布的 delta）
+    private(set) var sideChannelEventsSeen = 0
     /// VM 按 hostID 路由动作时直接取用；断开为 nil
     private(set) var coordinator: CrewCoordinator?
 
@@ -46,8 +50,6 @@ final class HostLink: Identifiable {
     /// 本主机为 paired 时的安全连接（registerPush 只有它有）
     private var secureConnection: SecureBridgeConnection?
     private var pumps: [Task<Void, Never>] = []
-    /// 旁路流里看到的每个会话最后一个块，turnCompleted 锚点用
-    private var lastBlockID: [String: String] = [:]
     private var autoPresentApprovals: Bool
     /// 防止 connectAll 与手动重连并发进场，叠出两套泵
     private var connecting = false
@@ -178,27 +180,50 @@ final class HostLink: Identifiable {
         self.coordinator = coordinator
         await coordinator.setAutoPresentApprovals(autoPresentApprovals)
 
+        // 低频流：直接在 MainActor 上落 UI 状态（Task 从本方法继承隔离）
         pumps.append(
             Task { [weak self] in
                 for await state in connection.linkStates {
-                    await MainActor.run { self?.absorb(linkState: state) }
+                    self?.absorb(linkState: state)
                 }
             }
         )
+        // 会话/眼镜屏：coordinator 已在 actor 内消化 raw 事件，这里只收聚合快照
         pumps.append(
             Task { [weak self] in
                 for await snapshot in coordinator.snapshots {
-                    await MainActor.run {
-                        self?.sessions = snapshot.sessions
-                        self?.glassScreen = snapshot.glassScreen
-                    }
+                    guard let self else { return }
+                    self.sessions = snapshot.sessions
+                    self.glassScreen = snapshot.glassScreen
                 }
             }
         )
         pumps.append(
             Task { [weak self] in
-                for await event in connection.tapped {
-                    await MainActor.run { self?.digest(event) }
+                for await message in coordinator.hostErrors {
+                    self?.reportError(message)
+                }
+            }
+        )
+        // 旁路侧信道（轮次分隔线 / 额度）：离主线程消化，仅变更时 hop 一次回主线程。
+        // 流式 blockUpdated 风暴不再逐条 MainActor.run（见 SideChannelDigest / hops 计数）。
+        pumps.append(
+            Task.detached { [weak self, tapped = connection.tapped] in
+                var digest = SideChannelDigest()
+                for await event in tapped {
+                    let changed = digest.ingest(event)
+                    guard changed else { continue }
+                    let markers = digest.turnMarkers
+                    let quota = digest.quota
+                    let hops = digest.publishCount
+                    let seen = digest.eventsSeen
+                    await MainActor.run {
+                        guard let self else { return }
+                        self.turnMarkers = markers
+                        self.quota = quota
+                        self.sideChannelMainActorHops = hops
+                        self.sideChannelEventsSeen = seen
+                    }
                 }
             }
         )
@@ -240,7 +265,8 @@ final class HostLink: Identifiable {
         glassScreen = .sessionList
         turnMarkers = [:]
         quota = [:]
-        lastBlockID = [:]
+        sideChannelMainActorHops = 0
+        sideChannelEventsSeen = 0
         latencyMs = nil
         linkState = .disconnected
     }
@@ -290,44 +316,14 @@ final class HostLink: Identifiable {
         )
     }
 
-    // MARK: - 会话侧信息
-
-    /// 旁路事件消化：只取协调层不外露的信息（轮次用量、额度），
-    /// 会话状态本身仍以 coordinator 的快照为准，两边不重复建状态机。
-    private func digest(_ event: BridgeEvent) {
-        switch event {
-        case let .blockAppended(_, sessionID, block):
-            lastBlockID[sessionID] = block.id
-
-        case let .turnCompleted(seq, sessionID, input, output, cached, _):
-            // 没有任何用量就不加分隔线——mockup 的 42s/98% 是示意，拿不到不编
-            guard input != nil || output != nil else { return }
-            guard let anchor = lastBlockID[sessionID] else { return }
-            let marker = TurnMarker(
-                id: "turn-\(sessionID)-\(seq)", afterBlockID: anchor,
-                inputTokens: input, outputTokens: output, cachedInputTokens: cached
-            )
-            // 断线重连会重放事件，同 seq 的分隔线只收一次
-            guard turnMarkers[sessionID]?.contains(where: { $0.id == marker.id }) != true
-            else { return }
-            turnMarkers[sessionID, default: []].append(marker)
-
-        case let .quotaUpdated(_, snapshot):
-            quota[snapshot.agent] = snapshot
-
-        default:
-            break
-        }
-    }
-
     // MARK: - 健康探测
 
     /// 每 10 秒探一次 /health 量延迟。无鉴权端点，只做 RTT 计量。
     private func startHealthLoop(baseURL: URL) {
         pumps.append(
-            Task { [weak self] in
+            Task.detached { [weak self] in
                 while !Task.isCancelled {
-                    let ms = await Self.measureHealth(baseURL: baseURL)
+                    let ms = await HostLink.measureHealth(baseURL: baseURL)
                     guard !Task.isCancelled else { return }
                     await MainActor.run { self?.latencyMs = ms }
                     try? await Task.sleep(for: .seconds(10))
@@ -350,6 +346,50 @@ final class HostLink: Identifiable {
             return max(ms, 1)
         } catch {
             return nil
+        }
+    }
+}
+
+/// 旁路侧信道纯消化：轮次分隔线与额度不进 CrewStore，由 BridgeConnectionTap 副本喂入。
+/// 离主线程跑；仅 `ingest` 返回 true 时才回主线程发布——相对「每条 raw event hop」
+/// 在流式 delta 风暴下数量级下降（见 `publishCount` vs `eventsSeen`）。
+struct SideChannelDigest: Sendable {
+    var lastBlockID: [String: String] = [:]
+    var turnMarkers: [String: [TurnMarker]] = [:]
+    var quota: [AgentKind: AgentQuotaSnapshot] = [:]
+    private(set) var eventsSeen = 0
+    private(set) var publishCount = 0
+
+    /// - returns: 是否产生了应对 UI 发布的变更
+    mutating func ingest(_ event: BridgeEvent) -> Bool {
+        eventsSeen += 1
+        switch event {
+        case let .blockAppended(_, sessionID, block):
+            lastBlockID[sessionID] = block.id
+            return false
+
+        case let .turnCompleted(seq, sessionID, input, output, cached, _):
+            // 没有任何用量就不加分隔线——mockup 的 42s/98% 是示意，拿不到不编
+            guard input != nil || output != nil else { return false }
+            guard let anchor = lastBlockID[sessionID] else { return false }
+            let marker = TurnMarker(
+                id: "turn-\(sessionID)-\(seq)", afterBlockID: anchor,
+                inputTokens: input, outputTokens: output, cachedInputTokens: cached
+            )
+            // 断线重连会重放事件，同 seq 的分隔线只收一次
+            guard turnMarkers[sessionID]?.contains(where: { $0.id == marker.id }) != true
+            else { return false }
+            turnMarkers[sessionID, default: []].append(marker)
+            publishCount += 1
+            return true
+
+        case let .quotaUpdated(_, snapshot):
+            quota[snapshot.agent] = snapshot
+            publishCount += 1
+            return true
+
+        default:
+            return false
         }
     }
 }

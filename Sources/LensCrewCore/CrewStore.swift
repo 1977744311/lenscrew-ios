@@ -7,12 +7,15 @@ public struct SessionState: Sendable, Equatable {
     public var pendingApprovals: [ApprovalRequest]
     /// 已消费到的最大 seq，重连时据此续订
     public var lastSeq: Int
+    /// subscribe 补齐失败后仍对不齐：流水可能缺段，UI 应明示，不可静默
+    public var isDesynced: Bool
 
     public init(session: AgentSession) {
         self.session = session
         self.blocks = []
         self.pendingApprovals = []
         self.lastSeq = 0
+        self.isDesynced = false
     }
 }
 
@@ -42,6 +45,14 @@ public struct CrewStore: Sendable, Equatable {
     public mutating func removeSession(_ sessionID: String) {
         sessions[sessionID] = nil
         order.removeAll { $0 == sessionID }
+    }
+
+    public mutating func markDesynced(_ sessionID: String) {
+        sessions[sessionID]?.isDesynced = true
+    }
+
+    public mutating func clearDesynced(_ sessionID: String) {
+        sessions[sessionID]?.isDesynced = false
     }
 
     @discardableResult

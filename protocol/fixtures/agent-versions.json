@@ -1,0 +1,24 @@
+{
+  "note": "Pinned CLI versions that the README runtime matrix and fixture recordings were validated against. Live smoke (bridge/scripts/agent-smoke.ts) prints detected versions and warns on drift; it does not rewrite fixtures or this file.",
+  "pinned": {
+    "codex": {
+      "command": "codex",
+      "version": "0.144.4",
+      "versionCommand": ["--version"]
+    },
+    "claude": {
+      "command": "claude",
+      "version": "2.1.215",
+      "versionCommand": ["--version"]
+    },
+    "cursor": {
+      "command": "cursor-agent",
+      "version": "2026.07.23",
+      "versionCommand": ["--version"]
+    }
+  },
+  "smoke": {
+    "script": "bridge/scripts/agent-smoke.ts",
+    "ci": "workflow_dispatch only — not part of default PR CI"
+  }
+}

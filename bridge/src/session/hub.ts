@@ -102,7 +102,8 @@ export class SessionHub {
   async restorePersisted(): Promise<void> {
     const persisted = this.#persistence?.load() ?? [];
     for (const record of persisted) {
-      const outcome = await this.#open(
+      // 失败的恢复由 #open catch 自行关 adapter、发 sessionClosed、从表里删掉
+      await this.#open(
         record.agent,
         record.workspaceRoot,
         record.model,
@@ -110,10 +111,6 @@ export class SessionHub {
         null,
         record.nativeId,
       );
-      if (!outcome.ok) {
-        // 失败的恢复不留僵尸会话占位
-        this.#sessions.delete(outcome.id);
-      }
     }
     this.#persist();
   }
@@ -335,11 +332,22 @@ export class SessionHub {
       this.#emit(record, { type: "capabilitiesResolved" });
       return { id, ok: true };
     } catch (error) {
+      // start 失败不能留僵尸行：关 adapter、致命错误、sessionClosed、从表删除。
+      // createSession/resumeSession 忽略返回值，清理必须在这里做完。
+      await record.adapter.close().catch(() => {});
       this.#emit(record, {
         type: "error",
         message: error instanceof Error ? error.message : String(error),
         fatal: true,
       });
+      this.#publish(record, {
+        type: "sessionClosed",
+        seq: ++record.seq,
+        sessionId: id,
+        reason: "start failed",
+      });
+      this.#sessions.delete(id);
+      this.#persist();
       return { id, ok: false };
     }
   }

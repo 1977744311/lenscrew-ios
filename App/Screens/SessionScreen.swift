@@ -63,6 +63,9 @@ struct SessionScreen: View {
     private func content(_ state: SessionState) -> some View {
         VStack(spacing: 0) {
             navHeader(state)
+            if state.isDesynced {
+                desyncBanner
+            }
             transcript(state)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -81,6 +84,27 @@ struct SessionScreen: View {
             .padding(.bottom, 6)
             .background(LC.bg.opacity(0.94))
         }
+    }
+
+    /// subscribe 补齐失败后的明示：流水可能缺段，点此重连主机通道再拉一次
+    private var desyncBanner: some View {
+        Button {
+            Task { await model.connectHost(sessionKey.hostID) }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 12))
+                Text("流水可能不完整，点此重连")
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer(minLength: 0)
+            }
+            .foregroundStyle(LC.orange)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 8)
+            .background(LC.orange.opacity(0.12))
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("session.desyncBanner")
     }
 
     // MARK: - 压缩导航头

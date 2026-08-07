@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      agent_smoke:
+        description: "Run live agent CLI smoke (requires self-hosted runner with CLIs)"
+        type: boolean
+        default: false
+      agent:
+        description: "Smoke only this agent (empty = all present on PATH)"
+        type: choice
+        options:
+          - ""
+          - codex
+          - claude
+          - cursor
+        default: ""
+
+jobs:
+  bridge:
+    name: bridge
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bridge
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.x"
+      - run: npm ci
+      - run: node --test 'test/**/*.test.ts'
+      - run: npx tsc --noEmit
+
+  swift:
+    name: swift
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.x"
+      - run: swift test
+
+  # Maintainer-only live smoke. Default PR/push never runs this.
+  # Needs a self-hosted (or otherwise CLI-equipped) runner — ubuntu-latest has no agents.
+  agent-smoke:
+    name: agent-smoke
+    if: github.event_name == 'workflow_dispatch' && inputs.agent_smoke == true
+    runs-on: self-hosted
+    defaults:
+      run:
+        working-directory: bridge
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.x"
+      - name: Live agent smoke
+        run: |
+          if [ -n "${{ inputs.agent }}" ]; then
+            node scripts/agent-smoke.ts --agent "${{ inputs.agent }}"
+          else
+            node scripts/agent-smoke.ts
+          fi

@@ -419,6 +419,11 @@ struct HomeScreen: View {
             HStack(spacing: 8) {
                 AgentBadge(agent: state.session.agent)
                 StatusPill(style: .session(state.session.status))
+                if state.isDesynced {
+                    Text("流水可能不完整")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(LC.orange)
+                }
                 Spacer()
             }
             Text(state.session.title)

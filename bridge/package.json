@@ -12,7 +12,8 @@
   },
   "scripts": {
     "test": "node --test 'test/**/*.test.ts'",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "smoke": "node scripts/agent-smoke.ts"
   },
   "devDependencies": {
     "typescript": "^5.9.3"

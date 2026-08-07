@@ -19,6 +19,32 @@ cd bridge && npx tsc --noEmit                 # 类型检查
 
 端到端链路由 `Tests/LensCrewCoreTests/EndToEndTests.swift` 覆盖：真起 bridge 进程，一路验到眼镜屏上出现审批卡。它包含在 `swift test` 里。
 
+### 真 CLI 烟雾（维护者可选，不进默认 PR CI）
+
+`node --test` **不**要求本机装 `codex` / `claude` / `cursor-agent`。上游 CLI 静默改行为时，fixture 单测仍可能全绿——维护者本机可跑活烟雾：
+
+```bash
+cd bridge && node scripts/agent-smoke.ts              # 探测 PATH 上有的 agent；缺的跳过
+cd bridge && node scripts/agent-smoke.ts --agent codex
+```
+
+- 钉死版本见 `protocol/fixtures/agent-versions.json`（与 README 运行时矩阵对齐）；烟雾打印漂移，**不**自动改 fixture
+- 失败文案带 `agent + version + step`（detect / initialize / prompt / turnCompleted / teardown）
+- CI：仅 `workflow_dispatch` 可选 job `agent-smoke`（默认 PR/push 不跑）
+
+录制刷新：改线上格式时先对真实 CLI 重录 `protocol/fixtures/*-turn.jsonl`（路径脱敏、占位），再同步 TS/Swift 两侧解析。
+
+### CI
+
+GitHub Actions（`.github/workflows/ci.yml`）在 push / PR 上跑：
+
+| Job | Runner | 覆盖 |
+|---|---|---|
+| `bridge` | ubuntu + Node 22.x | `node --test` + `tsc --noEmit` |
+| `swift` | macOS（带 Node） | 仓库根 `swift test`（LensCrewKit 库层 + EndToEnd） |
+
+**尚未进 CI**：`AppTests/`、`UITests/`（依赖 Xcode 工程 / 模拟器 / 签名）。本地用 `xcodegen` 生成工程后再跑。
+
 ## 双语 fixture 契约
 
 `protocol/fixtures/` 是 TS 与 Swift 的共同事实源：同一份 JSON 被 `bridge/test/` 与 `Tests/` 同时消费。

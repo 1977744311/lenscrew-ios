@@ -95,6 +95,7 @@ export interface ServiceUpOptions {
   relay: string | null;
   name: string;
   stateDir: string | null;
+  allowPlaintextLan?: boolean;
 }
 
 /** 把 up 选项全部显式化成 argv,plist 里不留"默认值随版本漂移"的余地 */
@@ -114,6 +115,9 @@ export function canonicalUpArgs(options: ServiceUpOptions): string[] {
   }
   if (options.stateDir !== null) {
     args.push("--state-dir", options.stateDir);
+  }
+  if (options.allowPlaintextLan === true) {
+    args.push("--allow-plaintext-lan");
   }
   return args;
 }

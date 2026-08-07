@@ -45,7 +45,7 @@ test("plist 对 XML 特殊字符转义", () => {
   assert.ok(!plist.includes(`a<b`));
 });
 
-test("canonicalUpArgs 全部显式化,relay/stateDir 缺席时不出现", () => {
+test("canonicalUpArgs 全部显式化,relay/stateDir/allowPlaintextLan 缺席时不出现", () => {
   const base = canonicalUpArgs({
     host: "0.0.0.0",
     port: 4311,
@@ -63,8 +63,15 @@ test("canonicalUpArgs 全部显式化,relay/stateDir 缺席时不出现", () => 
     relay: "https://relay.example",
     name: "n",
     stateDir: "/tmp/state",
+    allowPlaintextLan: true,
   });
-  assert.deepEqual(full.slice(-4), ["--relay", "https://relay.example", "--state-dir", "/tmp/state"]);
+  assert.deepEqual(full.slice(-5), [
+    "--relay",
+    "https://relay.example",
+    "--state-dir",
+    "/tmp/state",
+    "--allow-plaintext-lan",
+  ]);
 });
 
 test("stabilizedPathEnv 逐项 realpath 化、去重、坏目录原样保留", () => {

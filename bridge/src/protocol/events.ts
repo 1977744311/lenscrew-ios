@@ -3,7 +3,7 @@
 // 三个运行时的原生接口差异极大（2026-07-25 本机实测，见 README「运行时接口矩阵」）：
 //   codex  0.144.4      codex app-server，JSON-RPC/stdio，审批是 server→client 请求
 //   claude 2.1.215      claude -p --input-format stream-json，NDJSON，Anthropic 消息体
-//   cursor 2026.07.23   cursor-agent acp，ACP JSON-RPC；-p 模式没有审批通道，会直接 rejected
+//   cursor 2026.07.23   cursor-agent acp，ACP JSON-RPC
 // 差异只允许存在于 adapters/ 内部；越过本文件之后，客户端不应再关心 agent 种类，
 // 只关心 capabilities 自陈的能力。
 //
@@ -14,8 +14,7 @@ export type AgentKind = "codex" | "claude" | "cursor";
 
 /**
  * adapter 自陈的能力。客户端据此决定 UI（是否显示审批卡、计划模式开关、中断按钮），
- * 而不是按 agent 种类硬编码——同一个 agent 换驱动方式能力就会变，
- * 例如 cursor 走 acp 有审批、走 -p 就没有。
+ * 而不是按 agent 种类硬编码——同一 agent 换运行时配置时能力也会变。
  */
 export interface AgentCapabilities {
   /** 能把工具审批交给客户端裁决，而不是由 CLI 自行放行或拒绝 */

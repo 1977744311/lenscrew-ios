@@ -152,6 +152,117 @@ struct CrewCoordinatorTests {
         #expect(bridge.commands == [.subscribe(sessionID: "s1", fromSeq: 2)])
     }
 
+    @Test("subscribe 恒失败时标 desynced 并上抛宿主错误")
+    func subscribeFailureMarksDesyncedAndReports() async throws {
+        let bridge = MockBridgeConnection()
+        bridge.sendError = BridgeLinkError.transport("boom")
+        bridge.remainingSendFailures = -1
+        let coordinator = CrewCoordinator(bridge: bridge)
+
+        await coordinator.ingest(.sessionCreated(seq: 1, session: session("s1")))
+        await coordinator.ingest(
+            .blockAppended(
+                seq: 7, sessionID: "s1",
+                block: .agentMessage(id: "b1", text: "x", streaming: false)
+            )
+        )
+
+        // 失败的 send 不入 commands；增量+全量均失败 → desynced
+        #expect(bridge.commands.isEmpty)
+        #expect(await coordinator.sessions.first?.isDesynced == true)
+        #expect(await coordinator.reportedHostError == "流水可能不完整")
+    }
+
+    @Test("增量失败后全量重建成功则清除错误且不标 desynced")
+    func incrementalFailThenFullRebuildSucceeds() async throws {
+        let bridge = MockBridgeConnection()
+        bridge.sendError = BridgeLinkError.transport("boom")
+        bridge.remainingSendFailures = 1
+        let coordinator = CrewCoordinator(bridge: bridge)
+
+        await coordinator.ingest(.sessionCreated(seq: 1, session: session("s1")))
+        await coordinator.ingest(
+            .blockAppended(
+                seq: 7, sessionID: "s1",
+                block: .agentMessage(id: "b1", text: "x", streaming: false)
+            )
+        )
+
+        #expect(bridge.commands == [.subscribe(sessionID: "s1", fromSeq: 0)])
+        #expect(await coordinator.sessions.first?.isDesynced != true)
+        #expect(await coordinator.reportedHostError == nil)
+    }
+
+    @Test("重放后仍断档则升级全量重建")
+    func stillGappedEscalatesToFullRebuild() async throws {
+        let bridge = MockBridgeConnection()
+        let coordinator = CrewCoordinator(bridge: bridge)
+
+        await coordinator.ingest(.sessionCreated(seq: 1, session: session("s1")))
+        await coordinator.ingest(
+            .blockAppended(
+                seq: 7, sessionID: "s1",
+                block: .agentMessage(id: "b1", text: "x", streaming: false)
+            )
+        )
+        #expect(bridge.commands == [.subscribe(sessionID: "s1", fromSeq: 2)])
+
+        await coordinator.ingest(
+            .blockAppended(
+                seq: 9, sessionID: "s1",
+                block: .agentMessage(id: "b2", text: "y", streaming: false)
+            )
+        )
+        #expect(bridge.commands == [
+            .subscribe(sessionID: "s1", fromSeq: 2),
+            .subscribe(sessionID: "s1", fromSeq: 0),
+        ])
+        #expect(await coordinator.sessions.first?.isDesynced != true)
+    }
+
+    @Test("全量重建 10s 内限一次，超限直接 desynced")
+    func fullRebuildRateLimited() async throws {
+        final class ClockBox: @unchecked Sendable {
+            var value = Date(timeIntervalSince1970: 1_000)
+        }
+        let clock = ClockBox()
+        let bridge = MockBridgeConnection()
+        bridge.sendError = BridgeLinkError.transport("boom")
+        bridge.remainingSendFailures = -1
+        let coordinator = CrewCoordinator(bridge: bridge, now: { clock.value })
+
+        await coordinator.ingest(.sessionCreated(seq: 1, session: session("s1")))
+        await coordinator.ingest(
+            .blockAppended(
+                seq: 7, sessionID: "s1",
+                block: .agentMessage(id: "b1", text: "x", streaming: false)
+            )
+        )
+        #expect(await coordinator.sessions.first?.isDesynced == true)
+
+        // 冷却期内再 gap：不再发 subscribe
+        let countAfterFirst = bridge.commands.count
+        await coordinator.ingest(
+            .blockAppended(
+                seq: 8, sessionID: "s1",
+                block: .agentMessage(id: "b2", text: "z", streaming: false)
+            )
+        )
+        #expect(bridge.commands.count == countAfterFirst)
+        #expect(await coordinator.sessions.first?.isDesynced == true)
+
+        // 冷却过后允许再试一次全量
+        clock.value = Date(timeIntervalSince1970: 1_020)
+        bridge.remainingSendFailures = 0
+        await coordinator.ingest(
+            .blockAppended(
+                seq: 8, sessionID: "s1",
+                block: .agentMessage(id: "b2", text: "z", streaming: false)
+            )
+        )
+        #expect(bridge.commands.last == .subscribe(sessionID: "s1", fromSeq: 0))
+    }
+
     @Test("点会话行进入流水，返回回到列表")
     func navigatesIntoSessionAndBack() async throws {
         let bridge = MockBridgeConnection()

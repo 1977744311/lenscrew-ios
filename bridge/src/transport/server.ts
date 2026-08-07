@@ -13,14 +13,19 @@ import type { SecureGateway } from "../secure/secureGateway.ts";
  * node:http 原生就能发 SSE，而 WebSocket 服务端得自己写帧解析或引包。
  * iOS 侧 URLSession.bytes(for:).lines 正好是逐行 AsyncSequence，代价很低。
  *
- * M0 只在局域网/Tailscale 内直连，token 只防误连不是安全边界；
- * 端到端加密与二维码配对是下一步。
+ * 口令只防误连，不是安全边界。监听非回环时默认拒绝明文 `/events` `/command` `/git`，
+ * 强制走 `/e2ee/*`（或 `--allow-plaintext-lan` 显式放开，仅可信局域网）。
  */
 export interface BridgeServerOptions {
   hub: SessionHub;
   token: string;
   host: string;
   port: number;
+  /**
+   * 监听非回环时是否仍放行明文 `/events` `/command` `/git`。
+   * 缺省 false：非回环必须走 E2EE；回环始终放行明文（本机调试）。
+   */
+  allowPlaintextLan?: boolean;
   /** 传入即启用 /e2ee/stream + /e2ee/send 本地直连 E2EE 端点 */
   gateway?: SecureGateway;
   /** 传入即启用 /admin/pairing(仅回环来源 + 独立 Bearer token) */
@@ -55,6 +60,8 @@ const E2EE_QUEUE_LIMIT = 256;
 export function createBridgeServer(options: BridgeServerOptions): Server {
   const { hub, token, gateway, admin } = options;
   const gitRunner = options.gitRunner ?? runGitRequest;
+  const plaintextLanAllowed =
+    isLoopbackListenHost(options.host) || options.allowPlaintextLan === true;
   const subscribers = new Set<ServerResponse>();
   const e2eeChannels = new Map<string, E2eeChannel>();
   /** encryptedEnvelope 只带 roomId,靠 clientHello 学到的映射把回帧路由回来源 device */
@@ -145,11 +152,19 @@ export function createBridgeServer(options: BridgeServerOptions): Server {
     }
 
     if (request.method === "GET" && url.pathname === "/events") {
+      if (!plaintextLanAllowed) {
+        rejectPlaintextLan(response);
+        return;
+      }
       openStream(url, response);
       return;
     }
 
     if (request.method === "POST" && url.pathname === "/command") {
+      if (!plaintextLanAllowed) {
+        rejectPlaintextLan(response);
+        return;
+      }
       const command = (await readJSON(request)) as ClientCommand;
       if (command.type === "subscribe") {
         // 补齐断档：只补这一个客户端要的那段，不打扰其他订阅者
@@ -164,6 +179,10 @@ export function createBridgeServer(options: BridgeServerOptions): Server {
     }
 
     if (request.method === "POST" && url.pathname === "/git") {
+      if (!plaintextLanAllowed) {
+        rejectPlaintextLan(response);
+        return;
+      }
       const gitRequest = (await readJSON(request)) as GitRequest;
       try {
         sendJSON(response, 200, { ok: true, git: await gitRunner(gitRequest) });
@@ -275,6 +294,23 @@ function formatFrame(event: BridgeEvent): string {
 function isLoopback(request: IncomingMessage): boolean {
   const address = request.socket.remoteAddress ?? "";
   return address === "127.0.0.1" || address === "::1" || address === "::ffff:127.0.0.1";
+}
+
+/** 监听地址是否回环——决定明文端点是否默认可达局域网 */
+export function isLoopbackListenHost(host: string): boolean {
+  return (
+    host === "127.0.0.1" ||
+    host === "localhost" ||
+    host === "::1" ||
+    host === "[::1]"
+  );
+}
+
+function rejectPlaintextLan(response: ServerResponse): void {
+  sendJSON(response, 403, {
+    error:
+      "plaintext endpoints disabled on non-loopback listen; use /e2ee/* or pass --allow-plaintext-lan",
+  });
 }
 
 function authorized(request: IncomingMessage, token: string): boolean {

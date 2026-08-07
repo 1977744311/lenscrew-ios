@@ -11,35 +11,22 @@ import type {
   AgentAdapter,
 } from "../types.ts";
 import { CursorAcpNormalizer } from "./acpNormalizer.ts";
-import { CursorPrintNormalizer } from "./printNormalizer.ts";
-import type { AcpInitializeResult, AcpWireMessage, CursorPrintMessage, JsonRpcId } from "./protocol.ts";
+import type { AcpInitializeResult, AcpWireMessage, JsonRpcId } from "./protocol.ts";
 
 /**
- * 驱动路径。两条路径的差别不是「快慢」而是「能不能审批」，所以由它决定 capabilities。
- * acp 为默认；print 只在 acp 拉不起来时降级用。
- */
-export type CursorDrive = "acp" | "print";
-
-/**
- * 2026-07-25 实测得到的能力表。逐项理由：
+ * 2026-07-25 实测得到的能力表（cursor-agent acp）：
  *
- * approvals  acp=true：session/request_permission 真的会打到客户端，答复后命令才执行。
- *            print=false：需要审批的 shell 调用根本不问客户端，直接以 result.rejected 收场。
- * steering   两条都 false：ACP 一轮 prompt 未结束时能否再发 prompt 没有实测，
- *            宁可少报也不虚报；print 是一次性进程，更没有插话可言。
- * interrupt  acp=true：session/cancel 以「通知」发出后，session/prompt 立刻以
+ * approvals  session/request_permission 真的会打到客户端，答复后命令才执行。
+ * steering   ACP 一轮 prompt 未结束时能否再发 prompt 没有实测，宁可少报也不虚报。
+ * interrupt  session/cancel 以「通知」发出后，session/prompt 立刻以
  *            stopReason:"cancelled" 返回（实测）。注意它只能是通知——发成请求会被
- *            回 -32601 Method not found。print=true 靠 SIGINT 掐子进程。
- * planMode   acp=true：session/set_mode {modeId:"plan"} 实测返回 {}；
- *            print=true：CLI 有 --mode plan。
- * resume     acp=true：新进程里 session/load 一个历史会话成功，并以 user_message_chunk /
+ *            回 -32601 Method not found。
+ * planMode   session/set_mode {modeId:"plan"} 实测返回 {}。
+ * resume     新进程里 session/load 一个历史会话成功，并以 user_message_chunk /
  *            tool_call / agent_message_chunk 重放历史（实测）；start 时会再用 agent
- *            自陈的 loadSession 覆盖一次。print=true：CLI 有 --resume <chatId>。
+ *            自陈的 loadSession 覆盖一次。
  * streamingDeltas
- *            acp=true：agent_message_chunk 是逐字增量（实测）。
- *            print=false：不加 --stream-partial-output 时整段才给一次；加了之后
- *            CLI 会在增量之后把整段重发一遍，按增量消费就会重复整段回复，
- *            所以我们不开那个 flag，也就没有 token 级增量。
+ *            agent_message_chunk 是逐字增量（实测）。
  */
 const ACP_CAPABILITIES: AgentCapabilities = {
   approvals: true,
@@ -50,18 +37,9 @@ const ACP_CAPABILITIES: AgentCapabilities = {
   streamingDeltas: true,
 };
 
-const PRINT_CAPABILITIES: AgentCapabilities = {
-  approvals: false,
-  steering: false,
-  interrupt: true,
-  planMode: true,
-  resume: true,
-  streamingDeltas: false,
-};
-
 /**
  * 启动前的静态模式表（2026.07.23 实测录制的 session/new 自陈值）。
- * acp 路径下 session/new 会重新自陈一遍（经 modesResolved 覆盖），
+ * session/new 会重新自陈一遍（经 modesResolved 覆盖），
  * 上游加档时运行时数据自动跟上，这份表只服务"会话建立前 UI 要展示什么"。
  */
 const CURSOR_MODES: SessionModeOption[] = [
@@ -73,7 +51,6 @@ const CURSOR_DEFAULT_MODE = "agent";
 
 export interface CursorAdapterOptions {
   emit: AdapterEventSink;
-  drive?: CursorDrive;
   /** 可执行文件名；cursor-agent 与 agent 是同一个二进制 */
   binary?: string;
   now?: () => number;
@@ -84,23 +61,18 @@ export class CursorAdapter implements AgentAdapter {
   readonly defaultModeId: string = CURSOR_DEFAULT_MODE;
 
   readonly #emit: AdapterEventSink;
-  readonly #drive: CursorDrive;
   readonly #binary: string;
   readonly #now: () => number;
 
-  #capabilities: AgentCapabilities;
+  #capabilities: AgentCapabilities = { ...ACP_CAPABILITIES };
   #modes: SessionModeOption[] = CURSOR_MODES;
   #modeId: string = CURSOR_DEFAULT_MODE;
-  /** setModel 之后的覆盖值；print 路径下一轮 argv 用它 */
-  #modelOverride: string | null = null;
   #startOptions: AdapterStartOptions | null = null;
   #child: ChildProcess | null = null;
   #stdoutBuffer = "";
   #acpNormalizer: CursorAcpNormalizer | null = null;
-  #printNormalizer = new CursorPrintNormalizer();
   #nativeId: string | null = null;
   #closing = false;
-  #printInterrupted = false;
 
   /**
    * adapter 自己也要记一份「发出去的请求」：normalizer 那份是为了翻译事件，
@@ -116,10 +88,8 @@ export class CursorAdapter implements AgentAdapter {
 
   constructor(options: CursorAdapterOptions) {
     this.#emit = options.emit;
-    this.#drive = options.drive ?? "acp";
     this.#binary = options.binary ?? "cursor-agent";
     this.#now = options.now ?? (() => Date.now());
-    this.#capabilities = this.#drive === "acp" ? { ...ACP_CAPABILITIES } : { ...PRINT_CAPABILITIES };
   }
 
   get capabilities(): AgentCapabilities {
@@ -139,20 +109,11 @@ export class CursorAdapter implements AgentAdapter {
     this.#nativeId = options.resumeNativeId;
     this.#modeId = this.#validateMode(options.modeId ?? CURSOR_DEFAULT_MODE);
     this.#emit({ type: "status", status: "starting" });
-    if (this.#drive === "print") {
-      // -p 是一轮一个进程，这里没有常驻进程可拉起
-      this.#emit({ type: "status", status: "idle" });
-      return;
-    }
     await this.#startAcp(options);
   }
 
   async sendMessage(text: string): Promise<void> {
-    const options = this.#requireStarted();
-    if (this.#drive === "print") {
-      this.#startPrintTurn(options, text);
-      return;
-    }
+    this.#requireStarted();
     const sessionId = this.#requireSessionId();
     // 这个请求要到整轮结束才 resolve，不能 await，否则 sendMessage 会挂到 turn 结束
     void this.#request("session/prompt", {
@@ -164,14 +125,6 @@ export class CursorAdapter implements AgentAdapter {
   }
 
   async interrupt(): Promise<void> {
-    if (this.#drive === "print") {
-      if (this.#child === null) return;
-      // [实测] -p 被 SIGINT 打断后一行 result 都不吐，直接以 130 退出。
-      // turnCompleted 只能由这里补，否则会话永远停在 running
-      this.#printInterrupted = true;
-      this.#child.kill("SIGINT");
-      return;
-    }
     const sessionId = this.#nativeId;
     if (sessionId === null) return;
     // [实测] session/cancel 只认通知形态；带 id 发成请求会被回 -32601
@@ -179,12 +132,6 @@ export class CursorAdapter implements AgentAdapter {
   }
 
   async resolveApproval(approvalId: string, optionId: string): Promise<void> {
-    if (this.#drive === "print") {
-      // 契约明令不许静默吞掉：-p 路径下手机端根本没有可生效的批准
-      throw new Error(
-        "cursor -p 驱动没有审批通道，需要审批的命令会被 CLI 直接拒绝；请改用 acp 驱动",
-      );
-    }
     const requestId = this.#pendingApprovals.get(approvalId);
     if (requestId === undefined) {
       throw new Error(`未知的审批 id：${approvalId}`);
@@ -199,12 +146,6 @@ export class CursorAdapter implements AgentAdapter {
 
   async setMode(modeId: string): Promise<void> {
     const valid = this.#validateMode(modeId);
-    if (this.#drive === "print") {
-      // -p 一轮一进程：记住档位，下一轮 argv 生效；没有回显通道，这里自己发
-      this.#modeId = valid;
-      this.#emit({ type: "modeResolved", modeId: valid });
-      return;
-    }
     const sessionId = this.#requireSessionId();
     // [实测] 成功前 agent 先推 current_mode_update，normalizer 消费它发权威回显；
     // 无效 modeId 的错误信息自带合法取值清单，原样透传即可
@@ -213,12 +154,6 @@ export class CursorAdapter implements AgentAdapter {
   }
 
   async setModel(modelId: string): Promise<void> {
-    if (this.#drive === "print") {
-      // -p 一轮一进程：记住模型，下一轮 argv 的 --model 生效
-      this.#modelOverride = modelId;
-      this.#emit({ type: "modelResolved", model: modelId });
-      return;
-    }
     const sessionId = this.#requireSessionId();
     // [实测] cursor 要的键是 configId（ACP schema 写 optionId），成功回更新后的
     // configOptions；没有独立的模型回显通知，这里自己发
@@ -227,7 +162,6 @@ export class CursorAdapter implements AgentAdapter {
       configId: "model",
       value: modelId,
     });
-    this.#modelOverride = modelId;
     this.#emit({ type: "modelResolved", model: modelId });
   }
 
@@ -381,32 +315,6 @@ export class CursorAdapter implements AgentAdapter {
     this.#emitAll(this.#acpNormalizer?.normalize(message) ?? []);
   }
 
-  // MARK: - print
-
-  #startPrintTurn(options: AdapterStartOptions, text: string): void {
-    const args = ["-p", "--output-format", "stream-json"];
-    const model = this.#modelOverride ?? options.model;
-    if (model !== null) args.push("--model", model);
-    // -p 的 --mode 只认 plan/ask，agent 档就是不带 flag 的缺省行为
-    if (this.#modeId === "plan" || this.#modeId === "ask") {
-      args.push("--mode", this.#modeId);
-    }
-    if (this.#nativeId !== null) args.push("--resume", this.#nativeId);
-    args.push(text);
-    this.#spawn(args, options.workspaceRoot, (line) => this.#onPrintLine(line));
-  }
-
-  #onPrintLine(line: string): void {
-    let message: CursorPrintMessage;
-    try {
-      message = JSON.parse(line) as CursorPrintMessage;
-    } catch {
-      this.#emit({ type: "error", message: `无法解析 -p 报文：${line.slice(0, 200)}`, fatal: false });
-      return;
-    }
-    this.#emitAll(this.#printNormalizer.normalize(message));
-  }
-
   // MARK: - 进程与分帧
 
   #spawn(args: string[], cwd: string, onLine: (line: string) => void): void {
@@ -442,30 +350,15 @@ export class CursorAdapter implements AgentAdapter {
       if (this.#child === child) this.#child = null;
       this.#failPending(`cursor-agent 已退出（code ${code ?? "null"}）`);
       if (this.#closing) return;
-      if (this.#printInterrupted) {
-        this.#printInterrupted = false;
-        // 130 是我们自己发的 SIGINT 打出来的，不是故障
-        this.#emitAll([
-          {
-            type: "turnCompleted",
-            inputTokens: null,
-            outputTokens: null,
-            cachedInputTokens: null,
-            stopReason: "interrupted",
-          },
-          { type: "status", status: "idle" },
-        ]);
-        return;
-      }
       if (code !== 0 && code !== null) {
         this.#emit({
           type: "error",
           message: `cursor-agent 退出码 ${code}${stderrTail === "" ? "" : `：${stderrTail.trim()}`}`,
-          // acp 是常驻进程，退了这个会话就没了；-p 每轮一个进程，退出属正常收尾
-          fatal: this.#drive === "acp",
+          // ACP 是常驻进程，退了这个会话就没了
+          fatal: true,
         });
       }
-      if (this.#drive === "acp") this.#emit({ type: "status", status: "ended" });
+      this.#emit({ type: "status", status: "ended" });
     });
   }
 
@@ -478,7 +371,6 @@ export class CursorAdapter implements AgentAdapter {
 
   #emitAll(events: AdapterEvent[]): void {
     for (const event of events) {
-      // -p 路径的原生会话 id 只在每轮 init 里露一次，续接下一轮要靠它
       if (event.type === "nativeIdAssigned") this.#nativeId = event.nativeId;
       // 运行时自陈/回显的模式同步进 adapter 本地状态，setMode 校验用最新表
       if (event.type === "modesResolved") this.#modes = event.modes;

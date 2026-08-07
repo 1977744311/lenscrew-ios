@@ -72,6 +72,10 @@ public final class MockBridgeConnection: BridgeConnecting, @unchecked Sendable {
     private var sentCommands: [ClientCommand] = []
     private var sentGitRequests: [GitRequest] = []
     private var gitHandler: (@Sendable (GitRequest) async throws -> GitOutcome)?
+    /// 非 nil 且 `remainingSendFailures != 0` 时 `send` 抛出该错误
+    public var sendError: (any Error)?
+    /// >0：下 N 次 send 失败；`< 0`：每次都失败；`0`：不因 sendError 失败
+    public var remainingSendFailures: Int = 0
 
     public init() {
         var capturedContinuation: AsyncStream<BridgeEvent>.Continuation!
@@ -90,6 +94,10 @@ public final class MockBridgeConnection: BridgeConnecting, @unchecked Sendable {
     }
 
     public func send(_ command: ClientCommand) async throws {
+        if let sendError, remainingSendFailures != 0 {
+            if remainingSendFailures > 0 { remainingSendFailures -= 1 }
+            throw sendError
+        }
         lock.withLock { sentCommands.append(command) }
     }
 

@@ -152,7 +152,8 @@ const FIXTURE_COMMENT =
   "跨语言 E2EE 握手黄金样本。inputs 是写死的测试密钥/随机数(仅供 fixture,严禁用于生产);" +
   "expected 是 bridge/src/secure/crypto.ts 对这些输入的确定性输出:transcript(14 字段长度前缀拼接)的 SHA-256、" +
   "Ed25519 签名(clientAuth 带 client-auth 域分隔)、X25519 共享密钥、HKDF-SHA256 方向密钥、AES-256-GCM 信封。" +
-  "iOS 侧用 CryptoKit 按相同输入必须逐字节复现全部 expected。" +
+  "transcript/密钥派生/信封须与 iOS CryptoKit 逐字节一致；Ed25519 签名是验签兼容而非字节一致" +
+  "（CryptoKit 签名带随机化，Swift 侧验 Node 签名 + 自产签名可被同一公钥验过）。" +
   "本文件由 bridge/src/secure/fixture.ts 生成:cd bridge && node --input-type=module -e " +
   '"const m=await import(\'./src/secure/fixture.ts\');console.log(m.writeE2eeFixture())";' +
   "bridge/test/secure-crypto.test.ts 会断言本文件与重新生成的内容逐字节一致。";

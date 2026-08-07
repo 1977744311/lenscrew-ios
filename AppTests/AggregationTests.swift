@@ -108,6 +108,7 @@ struct AggregationTests {
         #expect(Set(sessions.map(\.key)).count == 2)
         #expect(sessions.allSatisfy { $0.state.session.id == FixtureBridgeConnection.sessionID })
         // 夹具给每条连接错开 updatedAtMs：统排 = 新的在前
+        try #require(sessions.count >= 2)
         #expect(
             sessions[0].state.session.updatedAtMs > sessions[1].state.session.updatedAtMs
         )

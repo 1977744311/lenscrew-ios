@@ -7,6 +7,7 @@ import type {
   SessionModeOption,
 } from "../../protocol/events.ts";
 import type { AdapterEventSink, AdapterStartOptions, AgentAdapter } from "../types.ts";
+import { withTimeout } from "../rpcTimeout.ts";
 import { ClaudeNormalizer } from "./normalizer.ts";
 import type {
   ClaudeCanUseToolRequest,
@@ -71,7 +72,6 @@ function claudeNativeMode(modeId: string): string {
 interface PendingControl {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
-  timer: NodeJS.Timeout;
 }
 
 interface PendingApproval {
@@ -399,21 +399,26 @@ export class ClaudeAdapter implements AgentAdapter {
   private sendControlRequest(request: Record<string, unknown>): Promise<unknown> {
     this.requestSeq += 1;
     const requestId = `lenscrew_${this.requestSeq}`;
+    const subtype = String(request["subtype"]);
 
-    return new Promise<unknown>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pendingControl.delete(requestId);
-        reject(new Error(`claude 控制请求超时: ${String(request["subtype"])}`));
-      }, CONTROL_TIMEOUT_MS);
-
-      this.pendingControl.set(requestId, { resolve, reject, timer });
+    const promise = new Promise<unknown>((resolve, reject) => {
+      this.pendingControl.set(requestId, { resolve, reject });
       try {
         this.write({ type: "control_request", request_id: requestId, request });
       } catch (error) {
-        clearTimeout(timer);
         this.pendingControl.delete(requestId);
         reject(error instanceof Error ? error : new Error(String(error)));
       }
+    });
+
+    // 仍用 15s 与原报错文案，只是超时竞态走共享 helper
+    return withTimeout(promise, CONTROL_TIMEOUT_MS, subtype, {
+      message: `claude 控制请求超时: ${subtype}`,
+      onTimeout: () => {
+        const pending = this.pendingControl.get(requestId);
+        this.pendingControl.delete(requestId);
+        pending?.reject(new Error(`claude 控制请求超时: ${subtype}`));
+      },
     });
   }
 
@@ -424,7 +429,6 @@ export class ClaudeAdapter implements AgentAdapter {
     if (!pending) return;
 
     this.pendingControl.delete(body.request_id);
-    clearTimeout(pending.timer);
 
     if (body.subtype === "error") {
       pending.reject(new Error(body.error));
@@ -435,7 +439,6 @@ export class ClaudeAdapter implements AgentAdapter {
 
   private failAllPending(error: Error): void {
     for (const pending of this.pendingControl.values()) {
-      clearTimeout(pending.timer);
       pending.reject(error);
     }
     this.pendingControl.clear();

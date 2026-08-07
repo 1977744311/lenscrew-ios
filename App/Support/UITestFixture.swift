@@ -34,8 +34,9 @@ enum UITestFixture {
     }
 }
 
-/// 内存版 BridgeConnecting：收到 listSessions 时发出脚本化的
-/// 1 个会话 + 几个块 + 1 条 shell 审批；resolveApproval 时结清审批并完成轮次。
+/// 内存版 BridgeConnecting：连接时发出脚本化的
+/// 1 个会话 + 几个块 + 1 条 shell 审批（对齐真实 SSE/E2EE 接入补发快照）；
+/// resolveApproval 时结清审批并完成轮次。
 /// seq 对该会话严格 +1——CrewStore 有断档检测，乱给会触发 subscribe 补齐。
 /// ordinal 给多实例（多主机）场景错开时间戳，聚合排序才有确定的可断言顺序；
 /// 会话 id 恒为 s-fixture，两台主机各持同名会话正好验证复合键不撞号。
@@ -73,6 +74,8 @@ final class FixtureBridgeConnection: BridgeConnecting, @unchecked Sendable {
 
     func connect() async throws {
         stateContinuation.yield(.connected)
+        // 对齐真实接入：SSE / E2EE 连上即补发存量；fixture 用完整脚本代替 seq-0 + replay
+        emitInitialScriptIfNeeded()
     }
 
     func disconnect() async {
@@ -82,12 +85,8 @@ final class FixtureBridgeConnection: BridgeConnecting, @unchecked Sendable {
     func send(_ command: ClientCommand) async throws {
         switch command {
         case .listSessions:
-            let script = lock.withLock { () -> [BridgeEvent] in
-                guard !listed else { return [] }
-                listed = true
-                return initialScript()
-            }
-            for event in script { eventContinuation.yield(event) }
+            // 兼容仍发 listSessions 的路径；已在 connect 发过则幂等跳过
+            emitInitialScriptIfNeeded()
 
         case let .resolveApproval(_, approvalID, optionID) where approvalID == Self.approvalID:
             let script = lock.withLock { () -> [BridgeEvent] in
@@ -100,6 +99,15 @@ final class FixtureBridgeConnection: BridgeConnecting, @unchecked Sendable {
         default:
             break
         }
+    }
+
+    private func emitInitialScriptIfNeeded() {
+        let script = lock.withLock { () -> [BridgeEvent] in
+            guard !listed else { return [] }
+            listed = true
+            return initialScript()
+        }
+        for event in script { eventContinuation.yield(event) }
     }
 
     // MARK: - 脚本

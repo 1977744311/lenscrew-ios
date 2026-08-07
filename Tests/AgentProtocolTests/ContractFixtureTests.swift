@@ -104,6 +104,46 @@ struct ContractFixtureTests {
         #expect(kinds == expected)
     }
 
+    @Test("client-commands.json 每条指令都能解码并原样编回")
+    func roundTripsEveryClientCommand() throws {
+        let data = try Data(contentsOf: fixtureURL("client-commands.json"))
+        let rawCommands = try #require(
+            JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+        )
+        #expect(!rawCommands.isEmpty)
+
+        let decoder = JSONDecoder()
+        let encoder = JSONEncoder()
+
+        for raw in rawCommands {
+            let originalData = try JSONSerialization.data(withJSONObject: raw)
+            let command = try decoder.decode(ClientCommand.self, from: originalData)
+            let reencoded = try encoder.encode(command)
+            let reencodedObject = try #require(
+                JSONSerialization.jsonObject(with: reencoded) as? [String: Any]
+            )
+            #expect(
+                NSDictionary(dictionary: reencodedObject) == NSDictionary(dictionary: raw),
+                "指令 \(raw["type"] ?? "?") 往返后不一致"
+            )
+        }
+    }
+
+    @Test("fixture 覆盖了全部十一种 ClientCommand")
+    func coversEveryClientCommandType() throws {
+        let data = try Data(contentsOf: fixtureURL("client-commands.json"))
+        let rawCommands = try #require(
+            JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+        )
+        let types = Set(rawCommands.compactMap { $0["type"] as? String })
+        let expected: Set<String> = [
+            "listSessions", "createSession", "resumeSession", "sendMessage",
+            "interrupt", "resolveApproval", "setSessionMode", "setSessionModel",
+            "setSessionReasoningEffort", "closeSession", "subscribe",
+        ]
+        #expect(types == expected)
+    }
+
     @Test("客户端指令的线上格式")
     func encodesClientCommands() throws {
         let encoder = JSONEncoder()

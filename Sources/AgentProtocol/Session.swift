@@ -9,7 +9,7 @@ public enum AgentKind: String, Sendable, Codable, CaseIterable {
 }
 
 /// adapter 自陈的能力。客户端据此决定 UI，而不是按 agent 种类硬编码——
-/// 同一个 agent 换驱动方式能力就会变（cursor 走 acp 有审批、走 -p 没有）。
+/// 同一 agent 换运行时配置时能力也会变。
 public struct AgentCapabilities: Sendable, Equatable, Codable {
     public var approvals: Bool
     public var steering: Bool

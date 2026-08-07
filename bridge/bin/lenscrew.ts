@@ -39,6 +39,8 @@ interface UpOptions {
   relay: string | null;
   name: string;
   stateDir: string | null;
+  /** 非回环监听时仍放行明文 /events /command /git；默认关 */
+  allowPlaintextLan: boolean;
 }
 
 function parseUpArguments(argv: string[]): UpOptions {
@@ -51,6 +53,7 @@ function parseUpArguments(argv: string[]): UpOptions {
     relay: null,
     name: hostname(),
     stateDir: null,
+    allowPlaintextLan: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const flag = argv[index];
@@ -78,6 +81,8 @@ function parseUpArguments(argv: string[]): UpOptions {
     } else if (flag === "--state-dir" && value) {
       options.stateDir = value;
       index += 1;
+    } else if (flag === "--allow-plaintext-lan") {
+      options.allowPlaintextLan = true;
     } else if (flag === "--help" || flag === "-h") {
       printHelp();
       process.exit(0);
@@ -103,6 +108,7 @@ function printHelp(): void {
       "  --relay <url>      启用远程中继,如 https://relay.example",
       "  --name <名字>      配对时展示的设备名,默认本机 hostname",
       "  --state-dir <目录> 状态目录(身份/信任表),等价环境变量 " + STATE_DIR_ENV,
+      "  --allow-plaintext-lan  非回环监听时仍放行明文 /events /command /git(默认拒绝,请走 E2EE)",
       "",
       "qr 选项:",
       "  --state-dir <目录> 状态目录,需与运行中的 bridge 一致",
@@ -291,6 +297,7 @@ async function runUp(options: UpOptions): Promise<void> {
     token: options.token,
     host: options.host,
     port: options.port,
+    allowPlaintextLan: options.allowPlaintextLan,
     gateway,
     admin: {
       token: adminToken,
@@ -332,6 +339,11 @@ async function runUp(options: UpOptions): Promise<void> {
   process.stdout.write(`  口令 ${options.token}\n`);
   if (options.host === "127.0.0.1" && options.relay === null) {
     process.stdout.write("  仅监听回环,手机连不上;要连手机请加 --host 或 --relay\n");
+  }
+  if (!isLoopbackHost(options.host) && !options.allowPlaintextLan) {
+    process.stdout.write(
+      "  明文 /events /command /git 已关闭(非回环);手机请走 E2EE,或显式 --allow-plaintext-lan\n",
+    );
   }
 
   const stopPushBridge = startPushBridge(hub, stateDir, identity.macDeviceId);
