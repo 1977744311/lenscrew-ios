@@ -45,7 +45,6 @@ struct RootView: View {
         .sheet(isPresented: $showNewSession) {
             NewSessionSheet(model: model)
         }
-        .preferredColorScheme(.dark)
         .tint(LC.blue)
         .task {
             // 通知管线先接上：冷启动攒下的深链与 token 都靠 attach 冲账。
@@ -200,7 +199,7 @@ private struct PadTabChrome: View {
         .background {
             ZStack(alignment: .bottom) {
                 Rectangle().fill(.ultraThinMaterial)
-                Color(hex: 0x0A0A0C).opacity(0.55)
+                LC.dockScrim
                 Hairline()
             }
         }
@@ -217,10 +216,10 @@ private struct PadTabChrome: View {
                 Text(label)
                     .font(.system(size: 14, weight: active ? .semibold : .medium))
             }
-            .foregroundStyle(active ? .white : Color(hex: 0xEBEBF5).opacity(0.45))
+            .foregroundStyle(active ? .white : LC.text3)
             .padding(.horizontal, 14)
             .padding(.vertical, 8)
-            .background(active ? LC.elev2 : Color.clear, in: Capsule())
+            .background(active ? LC.blue : Color.clear, in: Capsule())
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier("tab.\(String(describing: target))")
@@ -255,10 +254,10 @@ private struct TabDock: View {
         .padding(.top, 10)
         .padding(.bottom, 6)
         .background {
-            // mockup 的 dock-glass：模糊 + 深色罩 + 顶部发丝线
+            // mockup 的 dock-glass：模糊 + 罩色 + 顶部发丝线
             ZStack(alignment: .top) {
                 Rectangle().fill(.ultraThinMaterial)
-                Color(hex: 0x0A0A0C).opacity(0.62)
+                LC.dockScrim
                 Hairline()
             }
             .ignoresSafeArea(edges: .bottom)
@@ -278,7 +277,7 @@ private struct TabDock: View {
                 Text(label)
                     .font(.system(size: 10.5))
             }
-            .foregroundStyle(active ? .white : Color(hex: 0xEBEBF5).opacity(0.34))
+            .foregroundStyle(active ? LC.text : LC.text3)
             .frame(maxWidth: .infinity)
         }
         .buttonStyle(.plain)

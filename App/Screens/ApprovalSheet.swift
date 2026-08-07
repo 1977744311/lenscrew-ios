@@ -42,7 +42,7 @@ struct ApprovalSheet: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
-        .lcPresentationBackground(Color(hex: 0x161618))
+        .lcPresentationBackground(LC.sheet)
         .interactiveDismissDisabled(submittedOptionID != nil)
     }
 
@@ -89,14 +89,14 @@ struct ApprovalSheet: View {
             Text(approval.detail)
                 .font(.system(size: 13, design: .monospaced))
                 .lineSpacing(5)
-                .foregroundStyle(Color(hex: 0xEAEAF0))
+                .foregroundStyle(LC.approvalBody)
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 13)
                 .padding(.vertical, 11)
         }
         .frame(maxHeight: 140)
-        .background(Color.black.opacity(0.4), in: RoundedRectangle(cornerRadius: 12))
+        .background(LC.codeWell, in: RoundedRectangle(cornerRadius: 12))
         .overlay(
             RoundedRectangle(cornerRadius: 12).strokeBorder(LC.line, lineWidth: 0.5)
         )

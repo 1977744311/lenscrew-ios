@@ -363,12 +363,12 @@ struct SessionScreen: View {
             Text(text)
                 .font(.system(size: 15))
                 .lineSpacing(4)
-                .foregroundStyle(Color(hex: 0xEAF6FF))
+                .foregroundStyle(LC.userBubbleFg)
                 .textSelection(.enabled)
                 .padding(.horizontal, 13)
                 .padding(.vertical, 9)
                 .background(
-                    Color(hex: 0x32424E),
+                    LC.userBubbleBg,
                     in: UnevenRoundedRectangle(cornerRadii: .init(
                         topLeading: 18, bottomLeading: 18, bottomTrailing: 5, topTrailing: 18
                     ))
@@ -470,7 +470,7 @@ struct SessionScreen: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 12)
                 .padding(.vertical, 9)
-                .background(Color.black.opacity(0.35))
+                .background(LC.codeWell)
             if hidden > 0 || expanded {
                 Button {
                     if expanded {

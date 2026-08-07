@@ -209,7 +209,7 @@ struct HomeScreen: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 7)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Color.black.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
+                .background(LC.codeWell, in: RoundedRectangle(cornerRadius: 8))
             let resolving = resolvingApprovals.contains(item.id)
             HStack(spacing: 8) {
                 LCButton(title: "查看上下文", kind: .tinted, minHeight: 40, fontSize: 14) {
@@ -429,10 +429,10 @@ struct HomeScreen: View {
                 Text(label)
             }
             .font(.system(size: 12, weight: selected ? .semibold : .medium))
-            .foregroundStyle(selected ? Color(hex: 0x111111) : LC.text2)
+            .foregroundStyle(selected ? LC.chipSelectedFg : LC.text2)
             .padding(.horizontal, 9)
             .padding(.vertical, 3)
-            .background(selected ? Color(hex: 0xEAEAF0) : LC.elev2, in: Capsule())
+            .background(selected ? LC.chipSelectedBg : LC.elev2, in: Capsule())
         }
         .buttonStyle(.plain)
     }

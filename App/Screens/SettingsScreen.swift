@@ -88,7 +88,7 @@ struct SettingsScreen: View {
         let isActive = host.id == model.hosts.activeHostID
         return SetRow(
             icon: "laptopcomputer",
-            tint: isActive ? LC.lightBlue : Color(hex: 0xEBEBF5).opacity(0.45),
+            tint: isActive ? LC.lightBlue : LC.text3,
             title: host.name,
             detail: hostDetail(host)
         ) {
@@ -199,7 +199,7 @@ struct SettingsScreen: View {
                 .tint(LC.green)
             }
             SetRow(
-                icon: "bell.fill", tint: Color(hex: 0xEBEBF5).opacity(0.45),
+                icon: "bell.fill", tint: LC.text3,
                 title: "轮次完成时推送", detail: nil
             ) {
                 Toggle(
@@ -224,7 +224,7 @@ struct SettingsScreen: View {
     private var aboutSection: some View {
         Section {
             SetRow(
-                icon: "info.circle", tint: Color(hex: 0xEBEBF5).opacity(0.45),
+                icon: "info.circle", tint: LC.text3,
                 title: aboutTitle,
                 detail: "bridge 契约 v1 · DAT 0.8.0"
             ) {
@@ -385,7 +385,7 @@ private struct AddComputerSheet: View {
         .padding(.bottom, 10)
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
-        .lcPresentationBackground(Color(hex: 0x161618))
+        .lcPresentationBackground(LC.sheet)
         .fullScreenCover(isPresented: $showScanner) {
             PairingScanView(model: model) {
                 // 配对成功：收掉扫码页和本 sheet，回设置页看新主机行

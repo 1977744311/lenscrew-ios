@@ -444,7 +444,7 @@ struct GitScreen: View {
         case "D": return LC.red
         case "R", "C": return LC.lightBlue
         case "U": return LC.red
-        default: return Color(hex: 0xEBEBF5).opacity(0.5)  // "?" untracked
+        default: return LC.text3  // "?" untracked
         }
     }
 

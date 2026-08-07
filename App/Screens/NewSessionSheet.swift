@@ -109,7 +109,7 @@ struct NewSessionSheet: View {
         .frame(maxWidth: .infinity)
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
-        .lcPresentationBackground(Color(hex: 0x161618))
+        .lcPresentationBackground(LC.sheet)
         .onAppear {
             if selectedRoot == nil {
                 selectedRoot = model.hosts.workspaceRoots.first
@@ -158,10 +158,10 @@ struct NewSessionSheet: View {
                 Text(host.name)
             }
             .font(.system(size: 12, weight: selected ? .semibold : .medium))
-            .foregroundStyle(selected ? Color(hex: 0x111111) : LC.text2)
+            .foregroundStyle(selected ? LC.chipSelectedFg : LC.text2)
             .padding(.horizontal, 9)
             .padding(.vertical, 5)
-            .background(selected ? Color(hex: 0xEAEAF0) : LC.elev2, in: Capsule())
+            .background(selected ? LC.chipSelectedBg : LC.elev2, in: Capsule())
         }
         .buttonStyle(.plain)
     }
